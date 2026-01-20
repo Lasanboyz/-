@@ -2351,12 +2351,20 @@ export const dataService = new DataService();
 // ===============================
 // Supabase: Volunteers
 // ===============================
+// ===============================
+// Supabase: Volunteers
+// ===============================
 export async function fetchVolunteerByCode(volunteerCode: string) {
+  console.log('🔍 searching volunteer_code =', volunteerCode);
+
   const { data, error } = await supabase
     .from('volunteers')
     .select('*')
     .eq('volunteer_code', volunteerCode)
-    .single();
+    .maybeSingle(); // 👈 เปลี่ยนตรงนี้
+
+  console.log('📦 data =', data);
+  console.log('❌ error =', error);
 
   if (error) {
     console.error('[Supabase] fetchVolunteerByCode error:', error);
