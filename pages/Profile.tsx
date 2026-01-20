@@ -44,8 +44,8 @@ export const Profile: React.FC = () => {
   useEffect(() => {
     if (!id) return;
 
-    const run = async () => {
-      const data = await fetchVolunteerByCode(id.trim()); // id คือ volunteer_code
+    const volunteerCode = id.replace(/^v_/, '').trim(); // ตัด v_ ออก
+const data = await fetchVolunteerByCode(volunteerCode);
 
       if (!data) {
         setVolunteer(null);
