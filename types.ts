@@ -4,17 +4,21 @@ export interface Volunteer {
   name: string;
   type: 'HO' | 'Branch';
   email?: string;
+  isStaff?: boolean;
+  commu?: string; // Community Name
+  depart?: string; // Department
 }
 
 export interface Transaction {
   id: string;
   volunteerId: string;
   amount: number;
-  type: 'ACTIVITY' | 'BONUS' | 'REDEMPTION' | 'ADJUSTMENT';
+  type: 'ACTIVITY' | 'BONUS' | 'REDEMPTION' | 'ADJUSTMENT' | 'TRANSFER';
   description: string;
   date: string; // ISO String
   thaiYear: number;
   createdBy: string;
+  relatedId?: string; // ID of the other party in a transfer
 }
 
 export interface Reward {

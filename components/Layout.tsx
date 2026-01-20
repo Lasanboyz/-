@@ -43,7 +43,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
       <footer className="bg-white py-6 mt-8 border-t border-pink-100">
         <div className="max-w-4xl mx-auto px-4 text-center text-gray-400 text-sm">
           <p>© {new Date().getFullYear() + 543} อาสาชีวิตหมุนต่อได้</p>
-          <p className="mt-1">ร่วมสร้างสรรค์สังคมน่าอยู่ไปด้วยกัน</p>
+          <p className="mt-1">ร่วมสร้างสรรค์สังคมการเงินที่ดีไปด้วยกัน</p>
         </div>
       </footer>
     </div>
