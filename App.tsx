@@ -1,3 +1,4 @@
+// App.tsx
 import React from 'react';
 import { HashRouter as Router, Routes, Route } from 'react-router-dom';
 import { Layout } from './components/Layout';
@@ -13,7 +14,8 @@ const App: React.FC = () => {
       <Layout>
         <Routes>
           <Route path="/" element={<Home />} />
-          <Route path="/profile/:id" element={<Profile />} />
+          {/* ✅ เปลี่ยนเป็น volunteerCode */}
+          <Route path="/profile/:volunteerCode" element={<Profile />} />
           <Route path="/rewards/:volunteerId" element={<Rewards />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="/leaderboard" element={<Leaderboard />} />
