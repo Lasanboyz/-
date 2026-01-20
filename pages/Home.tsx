@@ -95,7 +95,7 @@ export const Home: React.FC = () => {
             {results.map((volunteer) => (
               <button
                 key={volunteer.id}
-                onClick={() => navigate(`/profile/${volunteer.id}`)}
+                onClick={() => navigate(`/profile/${volunteer.empId}`)}
                 className="w-full px-5 py-4 text-left hover:bg-pink-50 flex items-center gap-4 transition"
               >
                 <div className="bg-pink-100 p-3 rounded-full text-pink-500">
