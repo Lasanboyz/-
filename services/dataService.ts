@@ -1,4 +1,5 @@
 import { Volunteer, Transaction, Reward, RedemptionRequest, RankConfig } from '../types';
+import { supabase } from './supabaseClient';
 
 export const getCurrentThaiYear = () => {
     const date = new Date();
@@ -2347,3 +2348,20 @@ class DataService {
 }
 
 export const dataService = new DataService();
+// ===============================
+// Supabase: Volunteers
+// ===============================
+export async function fetchVolunteerByCode(volunteerCode: string) {
+  const { data, error } = await supabase
+    .from('volunteers')
+    .select('*')
+    .eq('volunteer_code', volunteerCode)
+    .single();
+
+  if (error) {
+    console.error('[Supabase] fetchVolunteerByCode error:', error);
+    return null;
+  }
+
+  return data;
+}
