@@ -1,6 +1,5 @@
-// App.tsx
 import React from 'react';
-import { HashRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { Home } from './pages/Home';
 import { Profile } from './pages/Profile';
@@ -14,7 +13,6 @@ const App: React.FC = () => {
       <Layout>
         <Routes>
           <Route path="/" element={<Home />} />
-          {/* ✅ เปลี่ยนเป็น volunteerCode */}
           <Route path="/profile/:volunteerCode" element={<Profile />} />
           <Route path="/rewards/:volunteerId" element={<Rewards />} />
           <Route path="/admin" element={<Admin />} />
