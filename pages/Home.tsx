@@ -10,12 +10,46 @@ export const Home: React.FC = () => {
   const navigate = useNavigate();
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // 🔑 ค้นหาจาก Supabase ทุกครั้งที่พิมพ์
-  useEffect(() => {
-    if (searchTerm.trim() === '') {
-      setResults([]);
+ useEffect(() => {
+  if (!id) return;
+
+  const run = async () => {
+    const volunteerCode = id.replace(/^v_/, '').trim(); // ✅ ตัด v_
+    const data = await fetchVolunteerByCode(volunteerCode);
+
+    if (!data) {
+      setVolunteer(null);
+      setAnnualPoints(0);
+      setTotalPoints(0);
+      setTransactions([]);
+      setRank(null);
       return;
     }
+
+    const mappedVolunteer: Volunteer = {
+      id: data.id,
+      empId: data.volunteer_code,
+      type: data.branch ?? '',
+    };
+
+    setVolunteer(mappedVolunteer);
+
+    const pts = Number(data.points ?? 0);
+    setTotalPoints(pts);
+    setAnnualPoints(pts);
+
+    const computedRank: RankConfig = {
+      name: pts >= 200 ? 'ผู้พิชิตตำนาน' : pts >= 50 ? 'ผู้เริ่มต้นแข็งแกร่ง' : 'ผู้เริ่มต้นแบ่งปัน',
+      color: pts >= 200 ? 'bg-yellow-100 text-yellow-800' : pts >= 50 ? 'bg-green-100 text-green-800' : 'bg-lime-100 text-lime-800',
+      icon: '🏅',
+    };
+    setRank(computedRank);
+
+    setTransactions([]);
+  };
+
+  run();
+}, [id, selectedYear]);
 
     const run = async () => {
       const data = await fetchVolunteerByCode(searchTerm.trim());
