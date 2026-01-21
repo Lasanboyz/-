@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, User, Gift, Trophy } from 'lucide-react';
 import { fetchVolunteerByCode } from '../services/dataService';
-import { Volunteer } from '../types';
+import type { Volunteer } from '../types';
 
 export const Home: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -10,7 +10,6 @@ export const Home: React.FC = () => {
   const navigate = useNavigate();
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // 🔎 ค้นหาจาก Supabase ทุกครั้งที่พิมพ์
   useEffect(() => {
     const term = searchTerm.trim();
 
@@ -21,20 +20,20 @@ export const Home: React.FC = () => {
 
     const run = async () => {
       try {
-        // ✅ หน้า Home ไม่ต้องยุ่งกับ v_ / id ใดๆ
         const data = await fetchVolunteerByCode(term);
 
-        if (data) {
-          const mapped: Volunteer = {
-            id: data.id, // uuid (เก็บไว้เฉยๆได้)
-            empId: data.volunteer_code, // รหัสพนักงาน
-            type: data.branch ?? '',
-          };
-
-          setResults([mapped]);
-        } else {
+        if (!data) {
           setResults([]);
+          return;
         }
+
+        const mapped: Volunteer = {
+          id: data.id, // uuid
+          empId: data.volunteer_code,
+          type: data.branch ?? '',
+        };
+
+        setResults([mapped]);
       } catch (err) {
         console.error('fetchVolunteerByCode error:', err);
         setResults([]);
@@ -45,16 +44,14 @@ export const Home: React.FC = () => {
   }, [searchTerm]);
 
   const handleRedeemClick = () => {
-    if (searchInputRef.current) {
-      searchInputRef.current.focus();
-      searchInputRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      alert('กรุณาค้นหารหัสพนักงานของคุณเพื่อเข้าสู่ระบบแลกของรางวัล');
-    }
+    if (!searchInputRef.current) return;
+    searchInputRef.current.focus();
+    searchInputRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    alert('กรุณาค้นหารหัสพนักงานของคุณเพื่อเข้าสู่ระบบแลกของรางวัล');
   };
 
   return (
     <div className="flex flex-col items-center justify-center min-h-[70vh] space-y-10 pb-10">
-      {/* ===== Title ===== */}
       <div className="text-center space-y-4 flex flex-col items-center">
         <div className="inline-flex items-center justify-center p-6 bg-white rounded-3xl shadow-xl mb-2 border border-pink-50 min-w-[120px] min-h-[120px]">
           <img
@@ -77,7 +74,6 @@ export const Home: React.FC = () => {
         </p>
       </div>
 
-      {/* ===== Search ===== */}
       <div className="w-full max-w-md relative z-20">
         <div className="relative group">
           <input
@@ -91,22 +87,19 @@ export const Home: React.FC = () => {
           <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-pink-300" size={28} />
         </div>
 
-        {/* ===== Result ===== */}
         {results.length > 0 && (
           <div className="absolute top-full left-0 right-0 mt-3 bg-white rounded-2xl shadow-xl border border-pink-100 overflow-hidden z-30">
             {results.map((volunteer) => (
               <button
                 key={volunteer.empId}
-                onClick={() => navigate(`/profile/v_${volunteer.empId}`)} // ✅ ให้ตรงกับที่คุณใช้จริง
+                onClick={() => navigate(`/profile/v_${volunteer.empId}`)}
                 className="w-full px-5 py-4 text-left hover:bg-pink-50 flex items-center gap-4 transition"
               >
                 <div className="bg-pink-100 p-3 rounded-full text-pink-500">
                   <User size={24} />
                 </div>
                 <div>
-                  <div className="font-bold text-gray-800 text-lg font-mono">
-                    รหัส: {volunteer.empId}
-                  </div>
+                  <div className="font-bold text-gray-800 text-lg font-mono">รหัส: {volunteer.empId}</div>
                   <div className="text-sm text-gray-500">สังกัด: {volunteer.type}</div>
                 </div>
               </button>
@@ -115,13 +108,10 @@ export const Home: React.FC = () => {
         )}
 
         {searchTerm.length > 1 && results.length === 0 && (
-          <div className="text-center mt-4 text-gray-400 bg-white/50 py-2 rounded-lg">
-            ไม่พบรหัสพนักงาน
-          </div>
+          <div className="text-center mt-4 text-gray-400 bg-white/50 py-2 rounded-lg">ไม่พบรหัสพนักงาน</div>
         )}
       </div>
 
-      {/* ===== Menu ===== */}
       <div className="grid grid-cols-2 gap-6 w-full max-w-lg mt-4">
         <button
           onClick={handleRedeemClick}
