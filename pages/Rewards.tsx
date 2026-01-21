@@ -14,13 +14,16 @@ export const Rewards: React.FC = () => {
   const [pendingRequests, setPendingRequests] = useState<RedemptionRequest[]>([]);
   const [successMsg, setSuccessMsg] = useState("");
 
-  // Loading / error UI state (กันค้าง Loading)
+  // Loading / error UI state
   const [pageLoading, setPageLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
 
   // Modal State
   const [selectedReward, setSelectedReward] = useState<Reward | null>(null);
   const [phoneNumber, setPhoneNumber] = useState("");
+
+  // ✅ helper: normalize code
+  const normalize = (v: any) => String(v ?? "").trim();
 
   useEffect(() => {
     let cancelled = false;
@@ -35,35 +38,59 @@ export const Rewards: React.FC = () => {
           return;
         }
 
-        // ✅ คง dataService เหมือนเดิม แค่ “หาได้ทั้ง id และ empId”
+        // ✅ คง dataService เดิมทั้งหมด แค่ทำให้หา volunteer เจอจากหลาย field
         const allVols = dataService.getVolunteers();
-        const v = allVols.find((i) => i.id === volunteerId || i.empId === volunteerId);
+
+        const v = allVols.find((i: any) => {
+          const pid = normalize(volunteerId);
+
+          const candidates = [
+            i?.id,
+            i?.empId,
+            i?.employeeId,
+            i?.employee_id,
+            i?.volunteerId,
+            i?.volunteer_id,
+            i?.volunteerCode,
+            i?.volunteer_code,
+            i?.code,
+            i?.staffCode,
+            i?.staff_code,
+          ].map(normalize);
+
+          return candidates.includes(pid);
+        });
+
+        // โหลดรายการของรางวัลไว้ก่อน (ต่อให้ไม่เจอ volunteer ก็ยังให้หน้าไม่โล่ง)
+        if (!cancelled) {
+          setRewards(dataService.getRewards());
+        }
 
         if (!v) {
           if (!cancelled) {
             setVolunteer(null);
-            setRewards(dataService.getRewards()); // ให้ยังเห็นรายการของรางวัลได้ (optional)
             setPendingRequests([]);
             setCurrentPoints(0);
-            setLoadError("ไม่พบข้อมูลผู้ใช้งาน กรุณากลับไปค้นหาใหม่");
+            setLoadError("ไม่พบรหัสผู้ใช้งานในลิงก์ กรุณากลับไปค้นหาใหม่");
           }
           return;
         }
 
         if (cancelled) return;
 
+        // ✅ ตั้ง volunteer
         setVolunteer(v);
-        setCurrentPoints(dataService.getVolunteerPoints(v.id));
-        setRewards(dataService.getRewards());
 
+        // ✅ แต้ม: ใช้ v.id เป็นหลักเหมือนเดิม (เพราะ dataService น่าจะใช้ id)
+        setCurrentPoints(dataService.getVolunteerPoints(v.id));
+
+        // ✅ pending requests: ใช้ v.id เหมือนเดิม
         const reqs = dataService
           .getRequests()
           .filter((r) => r.volunteerId === v.id && r.status === "PENDING");
         setPendingRequests(reqs);
       } catch (e: any) {
-        if (!cancelled) {
-          setLoadError(e?.message ?? "โหลดข้อมูลไม่สำเร็จ");
-        }
+        if (!cancelled) setLoadError(e?.message ?? "โหลดข้อมูลไม่สำเร็จ");
       } finally {
         if (!cancelled) setPageLoading(false);
       }
@@ -138,12 +165,23 @@ export const Rewards: React.FC = () => {
         <div className="max-w-md w-full bg-white border border-gray-100 shadow-sm rounded-2xl p-6 text-center space-y-3">
           <div className="text-gray-900 font-extrabold text-lg">เกิดข้อผิดพลาด</div>
           <div className="text-gray-600 text-sm">{loadError}</div>
+
           <button
-            onClick={() => navigate(-1)}
+            onClick={() => navigate("/")}
             className="inline-flex items-center justify-center gap-2 w-full bg-primary text-white font-bold py-3 rounded-xl hover:bg-pink-600 transition"
           >
-            <ArrowLeft size={18} /> กลับไปหน้าก่อนหน้า
+            <ArrowLeft size={18} /> กลับไปค้นหาใหม่
           </button>
+
+          {/* ให้ยังเห็นของรางวัลได้ (ถ้ามี) */}
+          {rewards.length > 0 && (
+            <button
+              onClick={() => setLoadError("")}
+              className="w-full bg-white border border-gray-200 text-gray-700 font-bold py-3 rounded-xl hover:bg-gray-50 transition"
+            >
+              ดูของรางวัล (แบบไม่ผูกผู้ใช้)
+            </button>
+          )}
         </div>
       </div>
     );
@@ -182,7 +220,12 @@ export const Rewards: React.FC = () => {
 
           <div className="shrink-0 text-right">
             <div className="text-[11px] text-gray-500">ผู้ใช้งาน</div>
-            <div className="font-bold text-gray-800">{volunteer?.empId ?? "-"}</div>
+            <div className="font-bold text-gray-800">
+              {(volunteer as any)?.empId ??
+                (volunteer as any)?.volunteer_code ??
+                (volunteer as any)?.code ??
+                "-"}
+            </div>
           </div>
         </div>
       </div>
@@ -255,12 +298,7 @@ export const Rewards: React.FC = () => {
                 className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden flex flex-col hover:shadow-md transition"
               >
                 <div className="h-48 bg-gray-100 relative">
-                  <img
-                    src={reward.imageUrl}
-                    alt={reward.name}
-                    className="w-full h-full object-cover"
-                    loading="lazy"
-                  />
+                  <img src={reward.imageUrl} alt={reward.name} className="w-full h-full object-cover" loading="lazy" />
 
                   <div className="absolute top-3 left-3 flex gap-2">
                     {isPending && (
@@ -319,26 +357,15 @@ export const Rewards: React.FC = () => {
       {selectedReward && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl relative animate-fade-in-up border border-gray-100">
-            <button
-              onClick={() => setSelectedReward(null)}
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
-            >
+            <button onClick={() => setSelectedReward(null)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
               <X size={24} />
             </button>
 
             <div className="mb-5">
               <h3 className="text-xl font-extrabold text-gray-900 mb-1">ยืนยันการแลกรางวัล</h3>
               <p className="text-gray-500 text-sm">
-                “{selectedReward.name}” ใช้{" "}
-                <span className="font-bold text-pink-600">{selectedReward.cost}</span> คะแนน
+                “{selectedReward.name}” ใช้ <span className="font-bold text-pink-600">{selectedReward.cost}</span> คะแนน
               </p>
-            </div>
-
-            <div className="bg-pink-50 border border-pink-100 rounded-2xl p-4 mb-5">
-              <div className="text-sm text-pink-800 font-bold">ข้อมูลติดต่อ</div>
-              <div className="text-xs text-pink-800/80 mt-1">
-                กรอกเบอร์โทร เพื่อให้ทีมงานติดต่อส่งมอบของรางวัล
-              </div>
             </div>
 
             <form onSubmit={confirmRedeem} className="space-y-4">
