@@ -13,7 +13,8 @@ const App: React.FC = () => {
       <Layout>
         <Routes>
           <Route path="/" element={<Home />} />
-          <Route path="/profile/:volunteerCode" element={<Profile />} />
+          {/* ✅ เปลี่ยนให้รับ uuid ของ Supabase */}
+          <Route path="/profile/:volunteerId" element={<Profile />} />
           <Route path="/rewards/:volunteerId" element={<Rewards />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="/leaderboard" element={<Leaderboard />} />
