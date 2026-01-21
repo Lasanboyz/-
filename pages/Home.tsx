@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Search, User, Gift, Trophy, Loader2 } from "lucide-react";
 import { fetchVolunteerByCode } from "../services/dataService";
@@ -15,11 +15,16 @@ export const Home: React.FC = () => {
   const [notFound, setNotFound] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // ✅ Debounce (กันยิง Supabase ทุกตัวอักษร)
+  // UI toast (ไม่ยุ่ง Supabase)
+  const [toast, setToast] = useState<string>("");
+
+  // แสดงอิโมจิหัวใจ ถ้ารูปโหลดไม่ได้
+  const [logoFailed, setLogoFailed] = useState(false);
+
+  // ✅ Debounce (กันยิง Supabase ทุกตัวอักษร) — คง logic เดิม
   useEffect(() => {
     const term = searchTerm.trim();
 
-    // เคลียร์สถานะเมื่อยังไม่พิมพ์/พิมพ์น้อยเกิน
     if (term.length < 2) {
       setResult(null);
       setLoading(false);
@@ -63,7 +68,7 @@ export const Home: React.FC = () => {
       } finally {
         if (!cancelled) setLoading(false);
       }
-    }, 350); // 350ms debounce
+    }, 350);
 
     return () => {
       cancelled = true;
@@ -72,15 +77,16 @@ export const Home: React.FC = () => {
   }, [searchTerm]);
 
   const goToProfile = (empId: string) => {
-    // ✅ route ใหม่: /profile/:id  และ id = volunteer_code
+    // ✅ คงเดิม: route ใหม่ /profile/:id (id = volunteer_code)
     navigate(`/profile/${empId}`);
   };
 
+  // ✅ ปุ่มแลกของรางวัล: โฟกัสค้นหา (ไม่ไปยุ่ง flow เดิม)
   const handleRedeemClick = () => {
-    if (!searchInputRef.current) return;
-    searchInputRef.current.focus();
-    searchInputRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
-    alert("กรุณาค้นหารหัสพนักงานของคุณเพื่อเข้าสู่ระบบแลกของรางวัล");
+    searchInputRef.current?.focus();
+    searchInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setToast("กรุณาค้นหารหัสพนักงานของคุณก่อน เพื่อเข้าสู่ระบบแลกของรางวัล");
+    window.setTimeout(() => setToast(""), 3500);
   };
 
   const clearSearch = () => {
@@ -92,115 +98,161 @@ export const Home: React.FC = () => {
     searchInputRef.current?.focus();
   };
 
+  const trimmed = useMemo(() => searchTerm.trim(), [searchTerm]);
+
   return (
-    <div className="flex flex-col items-center justify-center min-h-[70vh] space-y-10 pb-10">
-      {/* Header */}
-      <div className="text-center space-y-4 flex flex-col items-center">
-        <div className="inline-flex items-center justify-center p-6 bg-white rounded-3xl shadow-xl mb-2 border border-pink-50 min-w-[120px] min-h-[120px]">
-          <img
-            src="/logo.png"
-            alt="Logo"
-            className="h-28 w-auto object-contain"
-            onError={(e) => {
-              e.currentTarget.style.display = "none";
-            }}
-          />
+    <div className="relative">
+      {/* soft background */}
+      <div className="absolute inset-0 -z-10 bg-gradient-to-b from-pink-50 via-rose-50/40 to-white" />
+
+      {/* toast */}
+      {toast && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50">
+          <div className="bg-white/95 backdrop-blur border border-pink-100 shadow-lg rounded-full px-4 py-2 text-sm text-gray-700 flex items-center gap-2">
+            <span className="text-pink-500">💗</span>
+            <span className="font-medium">{toast}</span>
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-col items-center justify-center min-h-[75vh] space-y-10 pb-10 px-4">
+        {/* Header */}
+        <div className="text-center space-y-4 flex flex-col items-center">
+          <div className="relative">
+            <div className="inline-flex items-center justify-center bg-white rounded-[28px] shadow-xl border border-pink-50 min-w-[120px] min-h-[120px] px-6">
+              {/* ถ้ามีโลโก้ให้โชว์โลโก้ แต่ถ้าไม่มีก็โชว์หัวใจ */}
+              {!logoFailed ? (
+                <img
+                  src="/logo.png"
+                  alt="Logo"
+                  className="h-24 w-auto object-contain"
+                  onError={() => setLogoFailed(true)}
+                />
+              ) : (
+                <div className="text-[64px] leading-none">💗</div>
+              )}
+            </div>
+
+            {/* small glow */}
+            <div className="absolute -inset-6 -z-10 bg-pink-200/20 blur-2xl rounded-full" />
+          </div>
+
+          <h1 className="text-5xl md:text-6xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-pink-500 to-rose-400 drop-shadow-sm">
+            อาสาชีวิต
+            <br className="md:hidden" />
+            หมุนต่อได้
+          </h1>
+
+          <p className="text-base md:text-lg text-gray-500 font-medium max-w-lg mx-auto">
+            แพลตฟอร์มสะสมความดี แลกรับความสุขของชาวอาสา
+          </p>
         </div>
 
-        <h1 className="text-5xl md:text-6xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-pink-500 to-rose-400">
-          อาสาชีวิต<br className="md:hidden" />
-          หมุนต่อได้
-        </h1>
+        {/* Search Box */}
+        <div className="w-full max-w-md relative z-20">
+          <div className="relative group">
+            <input
+              ref={searchInputRef}
+              type="text"
+              placeholder="ค้นหารหัสพนักงาน..."
+              className="w-full pl-14 pr-12 py-5 rounded-full border-2 border-pink-100 bg-white/90 backdrop-blur focus:bg-white focus:border-pink-500 focus:ring-4 focus:ring-pink-100 shadow-lg text-lg outline-none transition"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              inputMode="text"
+              autoCapitalize="characters"
+              autoCorrect="off"
+            />
 
-        <p className="text-lg text-gray-500 font-medium max-w-lg mx-auto">
-          แพลตฟอร์มสะสมความดี แลกรับความสุขของชาวอาสา
-        </p>
-      </div>
+            <div className="absolute left-5 top-1/2 -translate-y-1/2">
+              <div className="w-10 h-10 rounded-full bg-pink-50 flex items-center justify-center border border-pink-100">
+                <Search className="text-pink-400" size={20} />
+              </div>
+            </div>
 
-      {/* Search Box */}
-      <div className="w-full max-w-md relative z-20">
-        <div className="relative group">
-          <input
-            ref={searchInputRef}
-            type="text"
-            placeholder="ค้นหารหัสพนักงาน..."
-            className="w-full pl-14 pr-12 py-5 rounded-full border-2 border-pink-100 bg-white focus:border-pink-500 focus:ring-4 focus:ring-pink-100 shadow-lg text-lg outline-none"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            inputMode="text"
-            autoCapitalize="characters"
-            autoCorrect="off"
-          />
-          <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-pink-300" size={28} />
+            {/* Right icon (loading / clear) */}
+            <div className="absolute right-4 top-1/2 -translate-y-1/2">
+              {loading ? (
+                <Loader2 className="animate-spin text-pink-400" size={22} />
+              ) : trimmed.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={clearSearch}
+                  className="w-9 h-9 rounded-full border border-gray-200 bg-white hover:bg-gray-50 text-gray-500 flex items-center justify-center transition"
+                  aria-label="Clear search"
+                >
+                  ✕
+                </button>
+              ) : null}
+            </div>
+          </div>
 
-          {/* Right icon (loading / clear) */}
-          <div className="absolute right-4 top-1/2 -translate-y-1/2">
-            {loading ? (
-              <Loader2 className="animate-spin text-pink-400" size={22} />
-            ) : searchTerm.trim().length > 0 ? (
+          {/* Result dropdown */}
+          {result && (
+            <div className="absolute top-full left-0 right-0 mt-3 bg-white rounded-2xl shadow-xl border border-pink-100 overflow-hidden z-30">
               <button
-                type="button"
-                onClick={clearSearch}
-                className="text-gray-400 hover:text-gray-600"
-                aria-label="Clear search"
+                onClick={() => goToProfile(result.empId)}
+                className="w-full px-5 py-4 text-left hover:bg-pink-50 flex items-center gap-4 transition"
               >
-                ✕
+                <div className="bg-pink-100 p-3 rounded-full text-pink-500">
+                  <User size={24} />
+                </div>
+                <div className="min-w-0">
+                  <div className="font-bold text-gray-800 text-lg font-mono truncate">
+                    รหัส: {result.empId}
+                  </div>
+                  <div className="text-sm text-gray-500 truncate">สังกัด: {result.type}</div>
+                </div>
+
+                <div className="ml-auto text-xs font-bold text-pink-600 bg-pink-50 border border-pink-100 px-3 py-1 rounded-full">
+                  ดูโปรไฟล์
+                </div>
               </button>
-            ) : null}
+            </div>
+          )}
+
+          {/* Messages */}
+          {errorMsg && (
+            <div className="text-center mt-4 text-red-600 bg-white/70 py-2 rounded-xl border border-red-100">
+              {errorMsg}
+            </div>
+          )}
+
+          {!errorMsg && notFound && trimmed.length >= 2 && (
+            <div className="text-center mt-4 text-gray-500 bg-white/70 py-2 rounded-xl border border-gray-100">
+              ไม่พบรหัสพนักงาน
+            </div>
+          )}
+
+          {/* Helper hint */}
+          <div className="text-center mt-3 text-xs text-gray-400">
+            * พิมพ์อย่างน้อย 2 ตัวอักษร ระบบจะค้นหาให้อัตโนมัติ
           </div>
         </div>
 
-        {/* Result dropdown */}
-        {result && (
-          <div className="absolute top-full left-0 right-0 mt-3 bg-white rounded-2xl shadow-xl border border-pink-100 overflow-hidden z-30">
-            <button
-              onClick={() => goToProfile(result.empId)}
-              className="w-full px-5 py-4 text-left hover:bg-pink-50 flex items-center gap-4 transition"
-            >
-              <div className="bg-pink-100 p-3 rounded-full text-pink-500">
-                <User size={24} />
-              </div>
-              <div>
-                <div className="font-bold text-gray-800 text-lg font-mono">
-                  รหัส: {result.empId}
-                </div>
-                <div className="text-sm text-gray-500">สังกัด: {result.type}</div>
-              </div>
-            </button>
-          </div>
-        )}
+        {/* Action buttons */}
+        <div className="grid grid-cols-2 gap-6 w-full max-w-lg mt-2">
+          <button
+            onClick={handleRedeemClick}
+            className="bg-white/90 backdrop-blur p-6 rounded-3xl shadow-md hover:shadow-xl transition flex flex-col items-center border border-pink-50 active:scale-[0.99]"
+          >
+            <div className="w-12 h-12 rounded-2xl bg-pink-50 border border-pink-100 flex items-center justify-center mb-3">
+              <Gift className="text-pink-500 w-7 h-7" />
+            </div>
+            <h3 className="font-extrabold text-gray-800">แลกของรางวัล</h3>
+            <p className="text-xs text-gray-500 mt-1">ค้นหารหัสก่อนเพื่อเข้าใช้งาน</p>
+          </button>
 
-        {/* Messages */}
-        {errorMsg && (
-          <div className="text-center mt-4 text-red-500 bg-white/70 py-2 rounded-lg">
-            {errorMsg}
-          </div>
-        )}
-
-        {!errorMsg && notFound && searchTerm.trim().length >= 2 && (
-          <div className="text-center mt-4 text-gray-400 bg-white/50 py-2 rounded-lg">
-            ไม่พบรหัสพนักงาน
-          </div>
-        )}
-      </div>
-
-      {/* Action buttons */}
-      <div className="grid grid-cols-2 gap-6 w-full max-w-lg mt-4">
-        <button
-          onClick={handleRedeemClick}
-          className="bg-white p-6 rounded-3xl shadow-md hover:shadow-xl transition flex flex-col items-center"
-        >
-          <Gift className="text-pink-500 w-8 h-8 mb-2" />
-          <h3 className="font-bold text-gray-700">แลกของรางวัล</h3>
-        </button>
-
-        <button
-          onClick={() => navigate("/leaderboard")}
-          className="bg-white p-6 rounded-3xl shadow-md hover:shadow-xl transition flex flex-col items-center"
-        >
-          <Trophy className="text-yellow-600 w-8 h-8 mb-2" />
-          <h3 className="font-bold text-gray-700">เช็กระดับอาสา</h3>
-        </button>
+          <button
+            onClick={() => navigate("/leaderboard")}
+            className="bg-white/90 backdrop-blur p-6 rounded-3xl shadow-md hover:shadow-xl transition flex flex-col items-center border border-pink-50 active:scale-[0.99]"
+          >
+            <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-100 flex items-center justify-center mb-3">
+              <Trophy className="text-yellow-600 w-7 h-7" />
+            </div>
+            <h3 className="font-extrabold text-gray-800">เช็กระดับอาสา</h3>
+            <p className="text-xs text-gray-500 mt-1">ดูอันดับและระดับประจำปี</p>
+          </button>
+        </div>
       </div>
     </div>
   );
