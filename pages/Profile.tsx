@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import React, { useEffect, useMemo, useState } from "react";
+import { Link, useParams } from "react-router-dom";
 import {
   ArrowLeft,
   Award,
@@ -10,138 +10,128 @@ import {
   X,
   AlertTriangle,
   User,
-} from 'lucide-react';
+} from "lucide-react";
 
-// ✅ ใช้ Supabase fetch แทน local dataService
-import { fetchVolunteerByCode, getCurrentThaiYear } from '../services/dataService';
-
-import { Volunteer, Transaction, RankConfig } from '../types';
+import { fetchVolunteerByCode, getCurrentThaiYear } from "../services/dataService";
+import { Volunteer, Transaction, RankConfig } from "../types";
 
 export const Profile: React.FC = () => {
-  // ✅ ตอนนี้ id = volunteer_code (เช่น 80010301)
+  // route: /profile/:id  (id = volunteer_code)
   const { id } = useParams<{ id: string }>();
+
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const [volunteer, setVolunteer] = useState<Volunteer | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [selectedYear, setSelectedYear] = useState<number>(getCurrentThaiYear());
 
-  // Stats
   const [annualPoints, setAnnualPoints] = useState(0);
   const [totalPoints, setTotalPoints] = useState(0);
   const [rank, setRank] = useState<RankConfig | null>(null);
 
-  // Transfer Modal State (ยังไม่ทำ Supabase transfer ในรอบนี้)
+  // Transfer modal
   const [showTransferModal, setShowTransferModal] = useState(false);
-  const [transferReceiverId, setTransferReceiverId] = useState('');
-  const [transferAmount, setTransferAmount] = useState('');
+  const [transferReceiverId, setTransferReceiverId] = useState("");
+  const [transferAmount, setTransferAmount] = useState("");
 
-  // ✅ ถ้าปีที่เลือกอยู่ในช่วงที่คุณตั้งให้ “ไม่ระบุ”
+  // ปีที่ “ไม่ระบุ”
   const isNoScoreYear = selectedYear >= 2557 && selectedYear <= 2568;
 
-  // ===============================
-  // ✅ LOAD จาก Supabase (points มาจากคอลัมน์ points)
-  // ===============================
+  // normalize volunteer code from url param
+  const volunteerCode = useMemo(() => {
+    if (!id) return "";
+    return id.replace(/^v_/, "").trim();
+  }, [id]);
+
+  // rank helper
+  const computeRank = (pts: number): RankConfig => {
+    if (pts >= 200) {
+      return { name: "ผู้พิชิตตำนาน", color: "bg-yellow-100 text-yellow-800", icon: "🏅" };
+    }
+    if (pts >= 50) {
+      return { name: "ผู้เริ่มต้นแข็งแกร่ง", color: "bg-green-100 text-green-800", icon: "💪" };
+    }
+    return { name: "ผู้เริ่มต้นแบ่งปัน", color: "bg-lime-100 text-lime-800", icon: "🌱" };
+  };
+
+  // =========================
+  // LOAD profile from Supabase
+  // =========================
   useEffect(() => {
-    if (!id) return;
-
-    useEffect(() => {
-  if (!id) return;
-
-  const run = async () => {
-    const code = id.replace(/^v_/, '').trim(); // ตัด v_ ออก
-    const data = await fetchVolunteerByCode(code);
-
-    if (!data) {
-      setVolunteer(null);
-      setAnnualPoints(0);
-      setTotalPoints(0);
-      setTransactions([]);
-      setRank(null);
+    if (!volunteerCode) {
+      setLoading(false);
+      setErrorMsg("Missing volunteer code");
       return;
     }
 
-    const mappedVolunteer: Volunteer = {
-      id: data.id,
-      empId: data.volunteer_code,
-      type: data.branch ?? '',
-    };
+    let cancelled = false;
 
-    setVolunteer(mappedVolunteer);
+    const run = async () => {
+      try {
+        setLoading(true);
+        setErrorMsg(null);
 
-    const pts = Number(data.points ?? 0);
-    setTotalPoints(pts);
-    setAnnualPoints(pts);
+        const data = await fetchVolunteerByCode(volunteerCode);
 
-    const computedRank: RankConfig = {
-      name:
-        pts >= 200 ? 'ผู้พิชิตตำนาน' : pts >= 50 ? 'ผู้เริ่มต้นแข็งแกร่ง' : 'ผู้เริ่มต้นแบ่งปัน',
-      color:
-        pts >= 200
-          ? 'bg-yellow-100 text-yellow-800'
-          : pts >= 50
-          ? 'bg-green-100 text-green-800'
-          : 'bg-lime-100 text-lime-800',
-      icon: '🏅',
-    };
-    setRank(computedRank);
+        if (cancelled) return;
 
-    setTransactions([]);
-  };
+        if (!data) {
+          setVolunteer(null);
+          setTransactions([]);
+          setAnnualPoints(0);
+          setTotalPoints(0);
+          setRank(null);
+          setErrorMsg("ไม่พบข้อมูลอาสา/รหัสพนักงานนี้");
+          return;
+        }
 
-  run();
-}, [id, selectedYear]);
+        const mappedVolunteer: Volunteer = {
+          id: data.id,                 // uuid จาก Supabase
+          empId: data.volunteer_code,   // volunteer_code
+          type: data.branch ?? "",      // branch
+        };
 
-      if (!data) {
+        const pts = Number(data.points ?? 0);
+
+        setVolunteer(mappedVolunteer);
+        setTotalPoints(pts);
+        setAnnualPoints(pts);
+        setRank(computeRank(pts));
+
+        // ตอนนี้ยังไม่มี transactions ใน Supabase → ว่างไว้ก่อน
+        setTransactions([]);
+      } catch (err: any) {
+        if (cancelled) return;
+        console.error("Profile load error:", err);
+        setErrorMsg(err?.message ?? "โหลดข้อมูลไม่สำเร็จ");
         setVolunteer(null);
+        setTransactions([]);
         setAnnualPoints(0);
         setTotalPoints(0);
-        setTransactions([]);
         setRank(null);
-        return;
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-
-      const mappedVolunteer: Volunteer = {
-        id: data.id, // uuid จาก Supabase
-        empId: data.volunteer_code, // รหัสพนักงาน
-        type: data.branch ?? '',
-      };
-
-      setVolunteer(mappedVolunteer);
-
-      // ✅ ตอนนี้แต้มอ่านจาก Supabase โดยตรง
-      const pts = Number(data.points ?? 0);
-      setTotalPoints(pts);
-
-      // ถ้าตอนนี้ยังไม่มีตาราง transactions ใน Supabase
-      // ให้ annualPoints = points ไปก่อน (หรือจะทำ 0 ก็ได้ตาม logic ของคุณ)
-      setAnnualPoints(pts);
-
-      // ✅ คำนวน rank แบบง่าย (ถ้า RankConfig ของคุณพึ่งพา dataService เดิมมาก)
-      // ถ้าคุณมี rank config อยู่ใน dataService เดิม ให้บอกผม เดี๋ยวผมผูกให้
-      // ตอนนี้ใส่ fallback กันพัง:
-      const annualCount = 0;
-      const computedRank: RankConfig = {
-        name: pts >= 200 ? 'ผู้พิชิตตำนาน' : pts >= 50 ? 'ผู้เริ่มต้นแข็งแกร่ง' : 'ผู้เริ่มต้นแบ่งปัน',
-        color: pts >= 200 ? 'bg-yellow-100 text-yellow-800' : pts >= 50 ? 'bg-green-100 text-green-800' : 'bg-lime-100 text-lime-800',
-        icon: '🏅',
-      };
-      setRank(computedRank);
-
-      // ✅ ยังไม่มี transactions → ให้เป็นว่าง
-      setTransactions([]);
     };
 
     run();
-  }, [id, selectedYear]);
 
-  // ✅ Transfer ยังไม่ผูก Supabase ในรอบนี้ (ไม่งั้นแต้มจะไม่ตรง)
+    return () => {
+      cancelled = true;
+    };
+  }, [volunteerCode, selectedYear]); // selectedYear ใส่ไว้เผื่อคุณจะทำ annualPoints แบบแยกปีทีหลัง
+
+  // =========================
+  // Transfer (ยังไม่ผูก Supabase)
+  // =========================
   const handleTransferSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!volunteer) return;
 
-    const amount = parseInt(transferAmount);
-    if (isNaN(amount) || amount <= 0) {
-      alert('กรุณาระบุจำนวนแต้มที่ถูกต้อง');
+    const amount = parseInt(transferAmount, 10);
+    if (Number.isNaN(amount) || amount <= 0) {
+      alert("กรุณาระบุจำนวนแต้มที่ถูกต้อง");
       return;
     }
 
@@ -153,13 +143,38 @@ export const Profile: React.FC = () => {
       return;
     }
 
-    alert('ตอนนี้ระบบโอนแต้มยังไม่ได้ผูกกับ Supabase (กำลังอ่านแต้มจาก Supabase แล้ว) — ถ้าจะให้โอนได้จริง เดี๋ยวผมทำฟังก์ชันให้ต่อเลย');
+    alert("ตอนนี้ระบบโอนแต้มยังไม่ได้ผูกกับ Supabase — ถ้าต้องการให้โอนได้จริง เดี๋ยวผมทำฟังก์ชันให้ต่อ");
   };
 
-  if (!id) return <div className="p-8 text-center">Missing profile id</div>;
-  if (!volunteer) return <div className="p-8 text-center">Loading...</div>;
+  // =========================
+  // UI states
+  // =========================
+  if (loading) {
+    return <div className="p-8 text-center">Loading...</div>;
+  }
 
-  // Filter Transactions for View (ตอนนี้ยังว่าง)
+  if (errorMsg) {
+    return (
+      <div className="p-8 text-center space-y-4">
+        <div className="text-gray-700 font-semibold">{errorMsg}</div>
+        <Link to="/" className="inline-flex items-center text-gray-500 hover:text-gray-800">
+          <ArrowLeft size={20} className="mr-1" /> กลับไปหน้าแรก
+        </Link>
+      </div>
+    );
+  }
+
+  if (!volunteer) {
+    return (
+      <div className="p-8 text-center space-y-4">
+        <div className="text-gray-700 font-semibold">ไม่พบข้อมูล</div>
+        <Link to="/" className="inline-flex items-center text-gray-500 hover:text-gray-800">
+          <ArrowLeft size={20} className="mr-1" /> กลับไปหน้าแรก
+        </Link>
+      </div>
+    );
+  }
+
   const displayedTransactions =
     selectedYear === 0 ? transactions : transactions.filter((t) => t.thaiYear === selectedYear);
 
@@ -186,6 +201,7 @@ export const Profile: React.FC = () => {
           <h1 className="text-3xl font-bold text-gray-900 font-mono tracking-wide">
             {volunteer.empId}
           </h1>
+
           <div className="flex flex-wrap items-center gap-3 text-gray-500 mt-2">
             <span className="text-sm">สังกัด: {volunteer.type}</span>
           </div>
@@ -195,18 +211,18 @@ export const Profile: React.FC = () => {
               <p className="text-sm text-gray-500 mb-1">ระดับประจำปี {selectedYear}</p>
               <div
                 className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full ${
-                  rank?.color ?? 'bg-gray-100 text-gray-700'
+                  rank?.color ?? "bg-gray-100 text-gray-700"
                 } font-bold text-sm`}
               >
-                <span>{rank?.icon ?? '🏷️'}</span>
-                <span>{rank?.name ?? '-'}</span>
+                <span>{rank?.icon ?? "🏷️"}</span>
+                <span>{rank?.name ?? "-"}</span>
               </div>
             </div>
 
             <div className="text-right">
               <p className="text-sm text-gray-500 mb-1">แต้มสะสมปีนี้</p>
-              <span className={`text-3xl font-bold ${isNoScoreYear ? 'text-gray-400' : 'text-primary'}`}>
-                {isNoScoreYear ? 'ไม่ระบุ' : annualPoints}
+              <span className={`text-3xl font-bold ${isNoScoreYear ? "text-gray-400" : "text-primary"}`}>
+                {isNoScoreYear ? "ไม่ระบุ" : annualPoints}
               </span>
             </div>
           </div>
@@ -229,7 +245,9 @@ export const Profile: React.FC = () => {
           </button>
         </div>
 
-        {/* ✅ สำคัญ: routes ของคุณถ้าใช้ empId ให้ส่ง empId ไปด้วย */}
+        {/* Rewards route ของคุณรับ volunteerId แต่ตอนนี้คุณส่ง empId อยู่
+            ถ้า Rewards ดึงตาม code ให้คงไว้แบบนี้ได้
+            แต่ถ้า Rewards ดึงตาม uuid ให้เปลี่ยนเป็น volunteer.id */}
         <Link
           to={`/rewards/${volunteer.empId}`}
           className="bg-secondary p-4 rounded-xl flex flex-col items-center justify-center text-center text-white hover:bg-pink-400 transition shadow-sm"
@@ -278,11 +296,11 @@ export const Profile: React.FC = () => {
               <div>
                 <div className="font-bold text-gray-800 text-sm">{tx.description}</div>
                 <div className="text-xs text-gray-400 mt-1">
-                  {new Date(tx.date).toLocaleDateString('th-TH')} • {tx.type}
+                  {new Date(tx.date).toLocaleDateString("th-TH")} • {tx.type}
                 </div>
               </div>
-              <div className={`font-bold text-lg ${tx.amount > 0 ? 'text-green-500' : 'text-red-500'}`}>
-                {tx.amount > 0 ? '+' : ''}
+              <div className={`font-bold text-lg ${tx.amount > 0 ? "text-green-500" : "text-red-500"}`}>
+                {tx.amount > 0 ? "+" : ""}
                 {tx.amount}
               </div>
             </div>
