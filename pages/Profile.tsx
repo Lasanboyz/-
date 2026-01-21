@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { supabase } from "../services/supabaseClient";
 import {
   ArrowLeft,
   Award,
@@ -13,6 +12,7 @@ import {
   User,
 } from "lucide-react";
 
+import { supabase as supabaseClient } from "../services/supabaseClient";
 import { fetchVolunteerByCode, getCurrentThaiYear } from "../services/dataService";
 import { Volunteer, Transaction, RankConfig } from "../types";
 
@@ -56,6 +56,12 @@ export const Profile: React.FC = () => {
     return { name: "ผู้เริ่มต้นแบ่งปัน", color: "bg-lime-100 text-lime-800", icon: "🌱" };
   };
 
+  const toThaiYear = (isoDate: string) => {
+    const d = new Date(isoDate);
+    const y = d.getFullYear();
+    return y + 543;
+  };
+
   // =========================
   // LOAD profile from Supabase
   // =========================
@@ -73,6 +79,7 @@ export const Profile: React.FC = () => {
         setLoading(true);
         setErrorMsg(null);
 
+        // 1) โหลด volunteer จาก service เดิม
         const data = await fetchVolunteerByCode(volunteerCode);
 
         if (cancelled) return;
@@ -88,45 +95,60 @@ export const Profile: React.FC = () => {
         }
 
         const mappedVolunteer: Volunteer = {
-          id: data.id,                 // uuid จาก Supabase
-          empId: data.volunteer_code,   // volunteer_code
-          type: data.branch ?? "",      // branch
+          id: data.id, // uuid จาก Supabase
+          empId: data.volunteer_code, // volunteer_code
+          type: data.branch ?? "", // branch
         };
 
         const pts = Number(data.points ?? 0);
 
         setVolunteer(mappedVolunteer);
         setTotalPoints(pts);
+
+        // ตอนนี้ยังไม่มี point แยกปี -> ให้แสดงเท่ากับ total ไปก่อน
         setAnnualPoints(pts);
         setRank(computeRank(pts));
 
-        // ตอนนี้ยังไม่มี transactions ใน Supabase → ว่างไว้ก่อน
-        // โหลดประวัติการโอนจาก Supabase (view)
-const { data: txData, error: txError } = await supabase
-  .from('point_transactions_view')
-  .select('*')
-  .or(`from_volunteer_id.eq.${data.id},to_volunteer_id.eq.${data.id}`)
-  .order('created_at', { ascending: false });
+        // 2) โหลดประวัติการโอนจาก Supabase (view)
+        // ✅ กันพังกรณี supabaseClient undefined / env ไม่ครบ
+        if (!supabaseClient) {
+          setTransactions([]);
+          return;
+        }
 
-if (!txError && txData) {
-  const mapped = txData.map((t: any) => ({
-    id: t.id,
-    volunteerId: data.id,
-    amount: t.amount,
-    type: t.from_volunteer_id === data.id ? 'TRANSFER_OUT' : 'TRANSFER_IN',
-    description:
-      t.from_volunteer_id === data.id
-        ? `โอนให้ ${t.to_name ?? t.to_volunteer_code}`
-        : `ได้รับจาก ${t.from_name ?? t.from_volunteer_code}`,
-    date: t.created_at,
-    thaiYear: getCurrentThaiYear(),
-    createdBy: 'system',
-  }));
+        const { data: txData, error: txError } = await supabaseClient
+          .from("point_transactions_view")
+          .select("*")
+          .or(`from_volunteer_id.eq.${data.id},to_volunteer_id.eq.${data.id}`)
+          .order("created_at", { ascending: false });
 
-  setTransactions(mapped);
-} else {
-  setTransactions([]);
-}
+        if (txError) {
+          console.error("TX load error:", txError);
+          setTransactions([]);
+          return;
+        }
+
+        const mapped: Transaction[] = (txData ?? []).map((t: any) => {
+          const isOut = t.from_volunteer_id === data.id;
+          const amount = Number(t.amount ?? 0);
+
+          return {
+            id: t.id,
+            volunteerId: data.id,
+            amount: isOut ? -Math.abs(amount) : Math.abs(amount),
+            type: isOut ? "TRANSFER_OUT" : "TRANSFER_IN",
+            description: isOut
+              ? `โอนให้ ${t.to_name ?? t.to_volunteer_code ?? "-"}`
+              : `ได้รับจาก ${t.from_name ?? t.from_volunteer_code ?? "-"}`,
+            date: t.created_at,
+            thaiYear: toThaiYear(t.created_at),
+            createdBy: "system",
+          } as Transaction;
+        });
+
+        setTransactions(mapped);
+
+        // ถ้าอนาคตคุณทำแต้มแยกปีจริง ค่อยคำนวณ annualPoints จาก mapped + selectedYear ได้
       } catch (err: any) {
         if (cancelled) return;
         console.error("Profile load error:", err);
@@ -146,7 +168,7 @@ if (!txError && txData) {
     return () => {
       cancelled = true;
     };
-  }, [volunteerCode, selectedYear]); // selectedYear ใส่ไว้เผื่อคุณจะทำ annualPoints แบบแยกปีทีหลัง
+  }, [volunteerCode]);
 
   // =========================
   // Transfer (ยังไม่ผูก Supabase)
@@ -271,9 +293,6 @@ if (!txError && txData) {
           </button>
         </div>
 
-        {/* Rewards route ของคุณรับ volunteerId แต่ตอนนี้คุณส่ง empId อยู่
-            ถ้า Rewards ดึงตาม code ให้คงไว้แบบนี้ได้
-            แต่ถ้า Rewards ดึงตาม uuid ให้เปลี่ยนเป็น volunteer.id */}
         <Link
           to={`/rewards/${volunteer.empId}`}
           className="bg-secondary p-4 rounded-xl flex flex-col items-center justify-center text-center text-white hover:bg-pink-400 transition shadow-sm"
@@ -288,19 +307,24 @@ if (!txError && txData) {
         <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
           <History size={20} className="text-primary" /> ประวัติกิจกรรม
         </h2>
+
         <div className="relative">
           <select
             value={selectedYear}
             onChange={(e) => setSelectedYear(Number(e.target.value))}
             className="appearance-none bg-white border border-pink-200 text-gray-700 py-1.5 pl-3 pr-8 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm shadow-sm"
           >
+            <option value={getCurrentThaiYear()}>{getCurrentThaiYear()}</option>
             <option value={0}>ทั้งหมด</option>
-            {availableYears.map((year) => (
-              <option key={year} value={year}>
-                {year}
-              </option>
-            ))}
+            {availableYears
+              .filter((y) => y !== getCurrentThaiYear())
+              .map((year) => (
+                <option key={year} value={year}>
+                  {year}
+                </option>
+              ))}
           </select>
+
           <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-pink-500">
             <Calendar size={14} />
           </div>
@@ -311,7 +335,7 @@ if (!txError && txData) {
       <div className="space-y-3">
         {displayedTransactions.length === 0 ? (
           <div className="text-center py-10 text-gray-400 bg-white rounded-xl border border-dashed border-gray-200">
-            ตอนนี้ยังไม่มีประวัติกิจกรรม (transactions) ใน Supabase
+            ไม่มีรายการในปี {selectedYear}
           </div>
         ) : (
           displayedTransactions.map((tx) => (
@@ -325,8 +349,9 @@ if (!txError && txData) {
                   {new Date(tx.date).toLocaleDateString("th-TH")} • {tx.type}
                 </div>
               </div>
-              <div className={`font-bold text-lg ${tx.amount > 0 ? "text-green-500" : "text-red-500"}`}>
-                {tx.amount > 0 ? "+" : ""}
+
+              <div className={`font-bold text-lg ${tx.amount >= 0 ? "text-green-500" : "text-red-500"}`}>
+                {tx.amount >= 0 ? "+" : ""}
                 {tx.amount}
               </div>
             </div>
