@@ -100,7 +100,32 @@ export const Profile: React.FC = () => {
         setRank(computeRank(pts));
 
         // ตอนนี้ยังไม่มี transactions ใน Supabase → ว่างไว้ก่อน
-        setTransactions([]);
+        // โหลดประวัติการโอนจาก Supabase (view)
+const { data: txData, error: txError } = await supabase
+  .from('point_transactions_view')
+  .select('*')
+  .or(`from_volunteer_id.eq.${data.id},to_volunteer_id.eq.${data.id}`)
+  .order('created_at', { ascending: false });
+
+if (!txError && txData) {
+  const mapped = txData.map((t: any) => ({
+    id: t.id,
+    volunteerId: data.id,
+    amount: t.amount,
+    type: t.from_volunteer_id === data.id ? 'TRANSFER_OUT' : 'TRANSFER_IN',
+    description:
+      t.from_volunteer_id === data.id
+        ? `โอนให้ ${t.to_name ?? t.to_volunteer_code}`
+        : `ได้รับจาก ${t.from_name ?? t.from_volunteer_code}`,
+    date: t.created_at,
+    thaiYear: getCurrentThaiYear(),
+    createdBy: 'system',
+  }));
+
+  setTransactions(mapped);
+} else {
+  setTransactions([]);
+}
       } catch (err: any) {
         if (cancelled) return;
         console.error("Profile load error:", err);
