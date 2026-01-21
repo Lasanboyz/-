@@ -14,7 +14,7 @@ const App: React.FC = () => {
         <Routes>
           <Route path="/" element={<Home />} />
           {/* ✅ เปลี่ยนให้รับ uuid ของ Supabase */}
-          <Route path="/profile/:volunteerId" element={<Profile />} />
+          <Route path="/profile/:id" element={<Profile />} />
           <Route path="/rewards/:volunteerId" element={<Rewards />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="/leaderboard" element={<Leaderboard />} />
