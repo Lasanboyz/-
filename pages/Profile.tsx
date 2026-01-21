@@ -44,9 +44,52 @@ export const Profile: React.FC = () => {
   useEffect(() => {
     if (!id) return;
 
-    const code = id.replace(/^v_/, '').trim();  // ✅ ตัด v_ ออก
-const data = await fetchVolunteerByCode(code);
+    useEffect(() => {
+  if (!id) return;
 
+  const run = async () => {
+    const code = id.replace(/^v_/, '').trim(); // ตัด v_ ออก
+    const data = await fetchVolunteerByCode(code);
+
+    if (!data) {
+      setVolunteer(null);
+      setAnnualPoints(0);
+      setTotalPoints(0);
+      setTransactions([]);
+      setRank(null);
+      return;
+    }
+
+    const mappedVolunteer: Volunteer = {
+      id: data.id,
+      empId: data.volunteer_code,
+      type: data.branch ?? '',
+    };
+
+    setVolunteer(mappedVolunteer);
+
+    const pts = Number(data.points ?? 0);
+    setTotalPoints(pts);
+    setAnnualPoints(pts);
+
+    const computedRank: RankConfig = {
+      name:
+        pts >= 200 ? 'ผู้พิชิตตำนาน' : pts >= 50 ? 'ผู้เริ่มต้นแข็งแกร่ง' : 'ผู้เริ่มต้นแบ่งปัน',
+      color:
+        pts >= 200
+          ? 'bg-yellow-100 text-yellow-800'
+          : pts >= 50
+          ? 'bg-green-100 text-green-800'
+          : 'bg-lime-100 text-lime-800',
+      icon: '🏅',
+    };
+    setRank(computedRank);
+
+    setTransactions([]);
+  };
+
+  run();
+}, [id, selectedYear]);
 
       if (!data) {
         setVolunteer(null);
