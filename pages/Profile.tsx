@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { supabase } from "../services/supabaseClient";
 import {
   ArrowLeft,
   Award,
