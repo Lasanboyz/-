@@ -225,7 +225,7 @@ export const Home: React.FC = () => {
 
           {/* Helper hint */}
           <div className="text-center mt-3 text-xs text-gray-400">
-            * พิมพ์อย่างน้อย 2 ตัวอักษร ระบบจะค้นหาให้อัตโนมัติ
+            * ระบบจะค้นหาให้อัตโนมัติ
           </div>
         </div>
 
