@@ -2348,7 +2348,7 @@ class DataService {
   }
 }
 
-// export const dataService = new DataService();
+ export const dataService = new DataService();
 // ===============================
 // Supabase: Volunteers
 // ===============================
