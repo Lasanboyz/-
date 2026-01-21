@@ -113,7 +113,7 @@ export const Home: React.FC = () => {
         </h1>
 
         <p className="text-lg text-gray-500 font-medium max-w-lg mx-auto">
-          แพลตฟอร์มสะสมความดี แลกรับความสุข
+          แพลตฟอร์มสะสมความดี แลกรับความสุขของชาวอาสา
         </p>
       </div>
 
