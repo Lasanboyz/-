@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, CheckCircle, Phone, X } from "lucide-react";
 import { dataService } from "../services/dataService";
@@ -14,27 +14,72 @@ export const Rewards: React.FC = () => {
   const [pendingRequests, setPendingRequests] = useState<RedemptionRequest[]>([]);
   const [successMsg, setSuccessMsg] = useState("");
 
+  // Loading / error UI state (กันค้าง Loading)
+  const [pageLoading, setPageLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+
   // Modal State
   const [selectedReward, setSelectedReward] = useState<Reward | null>(null);
   const [phoneNumber, setPhoneNumber] = useState("");
 
   useEffect(() => {
-    if (volunteerId) {
-      const allVols = dataService.getVolunteers();
-      const v = allVols.find((i) => i.id === volunteerId);
+    let cancelled = false;
 
-      if (v) {
+    const run = async () => {
+      try {
+        setPageLoading(true);
+        setLoadError("");
+
+        if (!volunteerId) {
+          if (!cancelled) setLoadError("ไม่พบรหัสผู้ใช้งานในลิงก์ กรุณากลับไปค้นหาใหม่");
+          return;
+        }
+
+        // ✅ คง dataService เหมือนเดิม แค่ “หาได้ทั้ง id และ empId”
+        const allVols = dataService.getVolunteers();
+        const v = allVols.find((i) => i.id === volunteerId || i.empId === volunteerId);
+
+        if (!v) {
+          if (!cancelled) {
+            setVolunteer(null);
+            setRewards(dataService.getRewards()); // ให้ยังเห็นรายการของรางวัลได้ (optional)
+            setPendingRequests([]);
+            setCurrentPoints(0);
+            setLoadError("ไม่พบข้อมูลผู้ใช้งาน กรุณากลับไปค้นหาใหม่");
+          }
+          return;
+        }
+
+        if (cancelled) return;
+
         setVolunteer(v);
         setCurrentPoints(dataService.getVolunteerPoints(v.id));
-      }
+        setRewards(dataService.getRewards());
 
-      setRewards(dataService.getRewards());
-      const reqs = dataService
-        .getRequests()
-        .filter((r) => r.volunteerId === volunteerId && r.status === "PENDING");
-      setPendingRequests(reqs);
-    }
+        const reqs = dataService
+          .getRequests()
+          .filter((r) => r.volunteerId === v.id && r.status === "PENDING");
+        setPendingRequests(reqs);
+      } catch (e: any) {
+        if (!cancelled) {
+          setLoadError(e?.message ?? "โหลดข้อมูลไม่สำเร็จ");
+        }
+      } finally {
+        if (!cancelled) setPageLoading(false);
+      }
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+    };
   }, [volunteerId]);
+
+  const pendingMap = useMemo(() => {
+    const set = new Set<string>();
+    pendingRequests.forEach((p) => set.add(p.rewardId));
+    return set;
+  }, [pendingRequests]);
 
   const initiateRedeem = (reward: Reward) => {
     if (currentPoints < reward.cost) {
@@ -63,23 +108,20 @@ export const Rewards: React.FC = () => {
       phoneNumber: phoneNumber.trim(),
     };
 
+    // ✅ คงเดิม
     dataService.addRequest(newReq);
     setPendingRequests([...pendingRequests, newReq]);
     setSuccessMsg(`ส่งคำขอแลก "${selectedReward.name}" แล้ว!`);
 
     setSelectedReward(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
-
     setTimeout(() => setSuccessMsg(""), 4000);
   };
 
-  const pendingMap = useMemo(() => {
-    const set = new Set<string>();
-    pendingRequests.forEach((p) => set.add(p.rewardId));
-    return set;
-  }, [pendingRequests]);
-
-  if (!volunteer) {
+  // =========================
+  // UI: Loading / Error
+  // =========================
+  if (pageLoading) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center">
         <div className="text-center space-y-2">
@@ -90,6 +132,26 @@ export const Rewards: React.FC = () => {
     );
   }
 
+  if (loadError) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-white border border-gray-100 shadow-sm rounded-2xl p-6 text-center space-y-3">
+          <div className="text-gray-900 font-extrabold text-lg">เกิดข้อผิดพลาด</div>
+          <div className="text-gray-600 text-sm">{loadError}</div>
+          <button
+            onClick={() => navigate(-1)}
+            className="inline-flex items-center justify-center gap-2 w-full bg-primary text-white font-bold py-3 rounded-xl hover:bg-pink-600 transition"
+          >
+            <ArrowLeft size={18} /> กลับไปหน้าก่อนหน้า
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // =========================
+  // Main UI
+  // =========================
   return (
     <div className="space-y-5 relative">
       {/* Sticky Top Bar */}
@@ -105,9 +167,7 @@ export const Rewards: React.FC = () => {
 
           <div className="text-right">
             <p className="text-[11px] text-gray-500">คะแนนคงเหลือ (รวม)</p>
-            <p className="text-2xl font-extrabold text-pink-500 leading-none">
-              {currentPoints}
-            </p>
+            <p className="text-2xl font-extrabold text-pink-500 leading-none">{currentPoints}</p>
           </div>
         </div>
       </div>
@@ -116,17 +176,13 @@ export const Rewards: React.FC = () => {
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-extrabold text-gray-900">
-              ของรางวัลแบ่งปันสุข
-            </h1>
-            <p className="text-sm text-gray-500 mt-1">
-              เลือกของรางวัลที่ชอบ แล้วกดยืนยันเพื่อส่งคำขอแลก
-            </p>
+            <h1 className="text-2xl font-extrabold text-gray-900">ของรางวัลแบ่งปันสุข</h1>
+            <p className="text-sm text-gray-500 mt-1">เลือกของรางวัลที่ชอบ แล้วกดยืนยันเพื่อส่งคำขอแลก</p>
           </div>
 
           <div className="shrink-0 text-right">
             <div className="text-[11px] text-gray-500">ผู้ใช้งาน</div>
-            <div className="font-bold text-gray-800">{volunteer.empId}</div>
+            <div className="font-bold text-gray-800">{volunteer?.empId ?? "-"}</div>
           </div>
         </div>
       </div>
@@ -146,9 +202,7 @@ export const Rewards: React.FC = () => {
       {pendingRequests.length > 0 && (
         <div className="bg-amber-50 border border-amber-100 p-4 rounded-2xl">
           <div className="flex items-center justify-between">
-            <h3 className="font-bold text-amber-900 text-sm">
-              รายการรออนุมัติ
-            </h3>
+            <h3 className="font-bold text-amber-900 text-sm">รายการรออนุมัติ</h3>
             <span className="text-xs font-bold text-amber-900/80 bg-amber-100 px-2 py-1 rounded-full">
               {pendingRequests.length} รายการ
             </span>
@@ -200,7 +254,6 @@ export const Rewards: React.FC = () => {
                 key={reward.id}
                 className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden flex flex-col hover:shadow-md transition"
               >
-                {/* Image */}
                 <div className="h-48 bg-gray-100 relative">
                   <img
                     src={reward.imageUrl}
@@ -209,7 +262,6 @@ export const Rewards: React.FC = () => {
                     loading="lazy"
                   />
 
-                  {/* Badges */}
                   <div className="absolute top-3 left-3 flex gap-2">
                     {isPending && (
                       <span className="text-xs font-bold bg-amber-500 text-white px-2 py-1 rounded-full shadow-sm">
@@ -228,12 +280,9 @@ export const Rewards: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Content */}
                 <div className="p-4 flex-grow flex flex-col justify-between">
                   <div>
-                    <h3 className="font-extrabold text-gray-900 text-lg leading-snug">
-                      {reward.name}
-                    </h3>
+                    <h3 className="font-extrabold text-gray-900 text-lg leading-snug">{reward.name}</h3>
 
                     <div className="mt-2 flex items-center justify-between">
                       <div className="text-pink-600 font-extrabold text-xl">
@@ -278,13 +327,10 @@ export const Rewards: React.FC = () => {
             </button>
 
             <div className="mb-5">
-              <h3 className="text-xl font-extrabold text-gray-900 mb-1">
-                ยืนยันการแลกรางวัล
-              </h3>
+              <h3 className="text-xl font-extrabold text-gray-900 mb-1">ยืนยันการแลกรางวัล</h3>
               <p className="text-gray-500 text-sm">
                 “{selectedReward.name}” ใช้{" "}
-                <span className="font-bold text-pink-600">{selectedReward.cost}</span>{" "}
-                คะแนน
+                <span className="font-bold text-pink-600">{selectedReward.cost}</span> คะแนน
               </p>
             </div>
 
@@ -297,9 +343,7 @@ export const Rewards: React.FC = () => {
 
             <form onSubmit={confirmRedeem} className="space-y-4">
               <div>
-                <label className="block text-sm font-bold text-gray-700 mb-2">
-                  เบอร์โทรศัพท์
-                </label>
+                <label className="block text-sm font-bold text-gray-700 mb-2">เบอร์โทรศัพท์</label>
                 <div className="relative">
                   <input
                     type="tel"
@@ -309,10 +353,7 @@ export const Rewards: React.FC = () => {
                     className="w-full pl-12 pr-4 py-3 rounded-2xl border border-gray-300 focus:ring-2 focus:ring-primary focus:border-primary outline-none font-semibold"
                     placeholder="08x-xxx-xxxx"
                   />
-                  <Phone
-                    className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"
-                    size={20}
-                  />
+                  <Phone className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
                 </div>
               </div>
 
