@@ -1,4 +1,3 @@
-import { supabase } from "../services/supabaseClient";
 import React, { useState, useEffect, useRef } from 'react';
 import { dataService, getCurrentThaiYear } from '../services/dataService';
 import { Volunteer, Transaction, Reward, RedemptionRequest } from '../types';
