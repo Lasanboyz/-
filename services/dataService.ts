@@ -580,3 +580,41 @@ export async function addActivityOnce(params: {
 
   return true;
 }
+export async function createVolunteer(params: {
+  volunteerCode: string; // รหัสอาสา เช่น V000001 หรือ EXT-123
+  name: string;
+  branch: string; // HO / Branch / หรือชื่อพื้นที่
+  isStaff?: boolean;
+}) {
+  const volunteerCode = String(params.volunteerCode ?? "").trim().toUpperCase();
+  const name = String(params.name ?? "").trim();
+  const branch = String(params.branch ?? "").trim();
+
+  if (!volunteerCode) throw new Error("กรุณากรอกรหัสอาสา/รหัสพนักงาน");
+  if (!name) throw new Error("กรุณากรอกชื่อ-นามสกุล");
+  if (!branch) throw new Error("กรุณากรอกสังกัด/พื้นที่");
+
+  // กันซ้ำก่อน
+  const { data: exist } = await supabase
+    .from("volunteers")
+    .select("id")
+    .eq("volunteer_code", volunteerCode)
+    .maybeSingle();
+
+  if (exist?.id) throw new Error("รหัสนี้มีอยู่แล้ว (ซ้ำ)");
+
+  const { data, error } = await supabase
+    .from("volunteers")
+    .insert({
+      volunteer_code: volunteerCode,
+      name,
+      branch,
+      points: 0,
+      is_staff: params.isStaff ?? false,
+    })
+    .select("id, volunteer_code, name, branch, points")
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  return data;
+}
