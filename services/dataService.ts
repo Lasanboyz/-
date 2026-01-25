@@ -29,40 +29,35 @@ class DataService {
         name: "กระเป๋าผ้าลดโลกร้อน",
         cost: 50,
         stock: 10,
-        imageUrl:
-          "https://i.postimg.cc/d1c6T7xn/1768933261970.jpg?auto=format&fit=crop&q=80&w=300",
+        imageUrl: "https://i.postimg.cc/d1c6T7xn/1768933261970.jpg?auto=format&fit=crop&q=80&w=300",
       },
       {
         id: "r2",
         name: "แก้วน้ำเก็บความเย็น",
         cost: 100,
         stock: 10,
-        imageUrl:
-          "https://images.unsplash.com/photo-1602143407151-7111542de6e8?auto=format&fit=crop&q=80&w=300",
+        imageUrl: "https://images.unsplash.com/photo-1602143407151-7111542de6e8?auto=format&fit=crop&q=80&w=300",
       },
       {
         id: "r3",
         name: "เสื้อยืดอาสา",
         cost: 100,
         stock: 10,
-        imageUrl:
-          "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&q=80&w=300",
+        imageUrl: "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&q=80&w=300",
       },
       {
         id: "r4",
         name: "หมวกร่มลมเย็น",
         cost: 100,
         stock: 10,
-        imageUrl:
-          "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&q=80&w=300",
+        imageUrl: "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&q=80&w=300",
       },
       {
         id: "r5",
         name: "บัตรกำนัล 100 บาท",
         cost: 100,
         stock: 10,
-        imageUrl:
-          "https://i.postimg.cc/XNdJ8rDC/images-(27).jpg?auto=format&fit=crop&q=80&w=300",
+        imageUrl: "https://i.postimg.cc/XNdJ8rDC/images-(27).jpg?auto=format&fit=crop&q=80&w=300",
       },
     ];
   }
@@ -93,35 +88,15 @@ export const dataService = new DataService();
 // ===============================
 export function getRank(points: number, activityCount: number = 0): RankConfig {
   if (points > 200 || activityCount > 10) {
-    return {
-      name: "ผู้มีพลังขับเคลื่อนสังคม",
-      minPoints: 201,
-      icon: "🔥",
-      color: "bg-orange-100 text-orange-600",
-    };
+    return { name: "ผู้มีพลังขับเคลื่อนสังคม", minPoints: 201, icon: "🔥", color: "bg-orange-100 text-orange-600" };
   }
   if (points > 100 || activityCount >= 5) {
-    return {
-      name: "นักสร้างสรรค์แบ่งปันโอกาส",
-      minPoints: 101,
-      icon: "🌳",
-      color: "bg-teal-100 text-teal-600",
-    };
+    return { name: "นักสร้างสรรค์แบ่งปันโอกาส", minPoints: 101, icon: "🌳", color: "bg-teal-100 text-teal-600" };
   }
   if (points > 50 || activityCount >= 3) {
-    return {
-      name: "เพื่อนชุมชน",
-      minPoints: 51,
-      icon: "🌿",
-      color: "bg-green-100 text-green-600",
-    };
+    return { name: "เพื่อนชุมชน", minPoints: 51, icon: "🌿", color: "bg-green-100 text-green-600" };
   }
-  return {
-    name: "ผู้เริ่มต้นแบ่งปัน",
-    minPoints: 0,
-    icon: "🌱",
-    color: "bg-lime-100 text-lime-600",
-  };
+  return { name: "ผู้เริ่มต้นแบ่งปัน", minPoints: 0, icon: "🌱", color: "bg-lime-100 text-lime-600" };
 }
 
 // ===============================
@@ -133,7 +108,7 @@ export async function fetchVolunteerByCode(volunteerCode: string) {
 
   const { data, error } = await supabase
     .from("volunteers")
-    .select("id, volunteer_code, name, branch")
+    .select("id, volunteer_code, name, branch") // ✅ no is_staff
     .eq("volunteer_code", code)
     .maybeSingle();
 
@@ -157,17 +132,15 @@ export function mapVolunteerRowToVolunteer(row: any): Volunteer {
 // ===============================
 // Supabase: Activity History (Profile/History page)
 // ===============================
-export async function fetchActivityHistoryByCode(
-  volunteerCode: string,
-  thaiYear?: number
-) {
+export async function fetchActivityHistoryByCode(volunteerCode: string, thaiYear?: number) {
   const code = (volunteerCode ?? "").trim();
   if (!code) return [];
 
   let q = supabase
     .from("activity_history")
-    .select("id, volunteer_code, name, branch, status, activity_date, thai_year, created_at")
+    .select("id, volunteer_code, name, branch, status, activity_date, thai_year, created_at, is_void")
     .eq("volunteer_code", code)
+    .eq("is_void", false) // ✅ IMPORTANT: do not count void
     .order("activity_date", { ascending: false });
 
   if (thaiYear && thaiYear > 0) q = q.eq("thai_year", thaiYear);
@@ -181,15 +154,15 @@ export async function fetchActivityHistoryByCode(
   return data ?? [];
 }
 
-export async function getVolunteerSummaryFromHistory(
-  volunteerCode: string,
-  thaiYear: number
-) {
+const normalizeStatus = (v: any) => String(v ?? "").trim().toUpperCase();
+const isNoScoreYear = (year: number) => year >= 2557 && year <= 2568;
+
+export async function getVolunteerSummaryFromHistory(volunteerCode: string, thaiYear: number) {
   const rowsThisYear = await fetchActivityHistoryByCode(volunteerCode, thaiYear);
   const activityCount = rowsThisYear.length;
 
   let points = 0;
-  if (!(thaiYear >= 2557 && thaiYear <= 2568)) points = activityCount * 20;
+  if (!isNoScoreYear(thaiYear)) points = activityCount * 20;
 
   const isAdmin = rowsThisYear.some((r: any) => normalizeStatus(r.status) === "ADMIN");
   return { points, activityCount, isAdmin, rowsThisYear };
@@ -207,7 +180,7 @@ export type LeaderboardSummaryRow = {
   activity_count: number;
   points: number;
   thai_year?: number;
-  is_staff?: boolean;
+  // ❌ removed is_staff to avoid future misuse
 };
 
 type ActivityRow = {
@@ -220,10 +193,7 @@ type ActivityRow = {
 };
 
 // ---- helpers ----
-const __debug = false; // ตั้ง true ชั่วคราวตอนเช็ก
 const normalizeCode = (v: any) => String(v ?? "").trim().toUpperCase();
-const normalizeStatus = (v: any) => String(v ?? "").trim().toUpperCase();
-const isNoScoreYear = (year: number) => year >= 2557 && year <= 2568;
 
 const parseThaiYear = (v: any): number | undefined => {
   if (v === null || v === undefined || v === "") return undefined;
@@ -242,11 +212,8 @@ const deriveThaiYear = (r: ActivityRow): number | undefined => {
   return parseThaiYear(r.thai_year) ?? thaiYearFromActivityDate(r.activity_date);
 };
 
-export async function fetchLeaderboardSummary(
-  mode: LeaderboardMode,
-  thaiYear: number // 0 = all years
-): Promise<LeaderboardSummaryRow[]> {
-  const PAGE_SIZE = 1000; // Supabase max rows มัก 1000
+export async function fetchLeaderboardSummary(mode: LeaderboardMode, thaiYear: number): Promise<LeaderboardSummaryRow[]> {
+  const PAGE_SIZE = 1000;
   let from = 0;
 
   const allRows: ActivityRow[] = [];
@@ -255,17 +222,13 @@ export async function fetchLeaderboardSummary(
     let q = supabase
       .from("activity_history")
       .select("volunteer_code, name, branch, status, activity_date, thai_year")
-      .eq("is_void", false)
-      .order("created_at", { ascending: true }) // ให้ pagination เสถียร
+      .eq("is_void", false) // ✅ do not count void
+      .order("created_at", { ascending: true })
       .range(from, from + PAGE_SIZE - 1);
 
-    // ✅ ถ้าเลือกปี -> filter ที่ DB ก่อน (เร็วและชัวร์)
-    if (thaiYear && thaiYear !== 0) {
-      q = q.eq("thai_year", thaiYear);
-    }
+    if (thaiYear && thaiYear !== 0) q = q.eq("thai_year", thaiYear);
 
     const { data, error } = await q;
-
     if (error) {
       console.error("[Supabase] fetchLeaderboardSummary error:", error);
       throw new Error(error.message);
@@ -275,17 +238,11 @@ export async function fetchLeaderboardSummary(
     if (batch.length === 0) break;
 
     allRows.push(...(batch as ActivityRow[]));
-
-    // ถ้าได้มาน้อยกว่า PAGE_SIZE แปลว่าหมดแล้ว
     if (batch.length < PAGE_SIZE) break;
 
     from += PAGE_SIZE;
-
-    // กัน loop ยาวเกิน (ปรับได้)
     if (from > 200000) break;
   }
-
-  console.log("[LB] fetched:", { mode, thaiYear, rows: allRows.length });
 
   const map = new Map<string, LeaderboardSummaryRow>();
 
@@ -296,13 +253,11 @@ export async function fetchLeaderboardSummary(
     const status = normalizeStatus(r.status);
     const rowIsAdmin = status === "ADMIN";
 
-    // mode filter
     if (mode === "ADMIN" && !rowIsAdmin) continue;
     if (mode === "VOLUNTEERS" && rowIsAdmin) continue;
 
     const rowYear = deriveThaiYear(r);
 
-    // year filter (สำรองอีกชั้น เผื่อ thai_year บางแถวเป็น null)
     if (thaiYear && thaiYear !== 0) {
       if (rowYear !== thaiYear) continue;
     }
@@ -316,12 +271,10 @@ export async function fetchLeaderboardSummary(
         activity_count: 0,
         points: 0,
         thai_year: thaiYear !== 0 ? thaiYear : undefined,
-        is_staff: mode === "ADMIN",
       } as LeaderboardSummaryRow);
 
     prev.activity_count += 1;
 
-    // points rule: ปี 2557–2568 ไม่นับคะแนน
     const effectiveYear = thaiYear !== 0 ? thaiYear : rowYear;
     if (typeof effectiveYear === "number" && !isNoScoreYear(effectiveYear)) {
       prev.points += 20;
@@ -333,19 +286,8 @@ export async function fetchLeaderboardSummary(
     map.set(code, prev);
   }
 
-  const result = Array.from(map.values());
-
-  // ✅ เช็ค 80010301 แบบชัด ๆ
-  console.log(
-    "[LB] has 80010301?",
-    result.some((x) => x.volunteer_code === "80010301"),
-    "row=",
-    result.find((x) => x.volunteer_code === "80010301")
-  );
-
-  return result;
+  return Array.from(map.values());
 }
-
 
 // ===============================
 // Backward-compat
@@ -360,23 +302,21 @@ export async function getAdmins() {
 // ===============================
 // Points Transfer (point_transactions)
 // ===============================
-
 type VolunteerRow = {
   id: string;
   volunteer_code: string;
   name?: string | null;
   branch?: string | null;
-  points?: number | null; // ถ้าตารางคุณใช้ชื่ออื่น เดี๋ยวค่อยเปลี่ยน
+  points?: number | null;
 };
 
 async function getVolunteerByCodeForPoints(codeRaw: string): Promise<VolunteerRow | null> {
   const code = String(codeRaw ?? "").trim().toUpperCase();
   if (!code) return null;
 
-  // สำคัญ: ดึง points มาด้วย เพื่อเช็กยอดก่อนโอน
   const { data, error } = await supabase
     .from("volunteers")
-    .select("id, volunteer_code, name, branch, points")
+    .select("id, volunteer_code, name, branch, points") // ✅ no is_staff
     .eq("volunteer_code", code)
     .maybeSingle();
 
@@ -402,10 +342,7 @@ export async function transferPoints(params: {
   if (fromCode === toCode) throw new Error("ห้ามโอนให้รหัสเดียวกัน");
   if (!Number.isFinite(amount) || amount <= 0) throw new Error("จำนวนแต้มต้องมากกว่า 0");
 
-  const [fromV, toV] = await Promise.all([
-    getVolunteerByCodeForPoints(fromCode),
-    getVolunteerByCodeForPoints(toCode),
-  ]);
+  const [fromV, toV] = await Promise.all([getVolunteerByCodeForPoints(fromCode), getVolunteerByCodeForPoints(toCode)]);
 
   if (!fromV) throw new Error(`ไม่พบผู้โอน: ${fromCode}`);
   if (!toV) throw new Error(`ไม่พบผู้รับ: ${toCode}`);
@@ -413,7 +350,7 @@ export async function transferPoints(params: {
   const fromPoints = Number(fromV.points ?? 0);
   if (amount > fromPoints) throw new Error(`แต้มไม่พอ (คงเหลือ ${fromPoints})`);
 
-  // Insert ธุรกรรม -> trigger จะไปอัปเดต points ให้เอง
+  // Insert ธุรกรรม -> (ถ้ามี trigger อัปเดต points อยู่ ก็จะทำงานตามเดิม)
   const { data, error } = await supabase
     .from("point_transactions")
     .insert({
@@ -434,7 +371,6 @@ export async function transferPoints(params: {
   return data;
 }
 
-// ใช้ refresh หน้าจอหลังโอน: ดึง points ปัจจุบัน
 export async function fetchVolunteerPointsByCode(volunteerCode: string) {
   const v = await getVolunteerByCodeForPoints(volunteerCode);
   if (!v) return null;
@@ -444,12 +380,7 @@ export async function fetchVolunteerPointsByCode(volunteerCode: string) {
 // ===============================
 // Admin: Adjust Points (Give / Deduct) + Logs
 // ===============================
-
-export async function adminGivePoints(params: {
-  toVolunteerCode: string;
-  amount: number;
-  note?: string;
-}) {
+export async function adminGivePoints(params: { toVolunteerCode: string; amount: number; note?: string }) {
   const toCode = String(params.toVolunteerCode ?? "").trim().toUpperCase();
   const amount = Number(params.amount ?? 0);
   const note = String(params.note ?? "").trim();
@@ -460,7 +391,6 @@ export async function adminGivePoints(params: {
   const toV = await getVolunteerByCodeForPoints(toCode);
   if (!toV) throw new Error(`ไม่พบผู้รับ: ${toCode}`);
 
-  // insert log (from=null => give)
   const { error } = await supabase.from("point_transactions").insert({
     from_volunteer_id: null,
     to_volunteer_id: toV.id,
@@ -477,11 +407,7 @@ export async function adminGivePoints(params: {
   return true;
 }
 
-export async function adminDeductPoints(params: {
-  volunteerCode: string;
-  amount: number;
-  note?: string;
-}) {
+export async function adminDeductPoints(params: { volunteerCode: string; amount: number; note?: string }) {
   const code = String(params.volunteerCode ?? "").trim().toUpperCase();
   const amount = Number(params.amount ?? 0);
   const note = String(params.note ?? "").trim();
@@ -495,18 +421,13 @@ export async function adminDeductPoints(params: {
   const current = Number(v.points ?? 0);
   if (current < amount) throw new Error(`แต้มไม่พอ (คงเหลือ ${current})`);
 
-  // 1) หักแต้มตรง ๆ
-  const { error: updErr } = await supabase
-    .from("volunteers")
-    .update({ points: current - amount })
-    .eq("id", v.id);
-
+  // หักแต้มตรง ๆ (คงพฤติกรรมเดิมของคุณไว้)
+  const { error: updErr } = await supabase.from("volunteers").update({ points: current - amount }).eq("id", v.id);
   if (updErr) {
     console.error("[Supabase] adminDeductPoints update error:", updErr);
     throw new Error(updErr.message);
   }
 
-  // 2) insert log ไว้ดูประวัติ (amount ต้องเป็นบวกตาม constraint)
   const { error: logErr } = await supabase.from("point_transactions").insert({
     from_volunteer_id: null,
     to_volunteer_id: v.id,
@@ -517,7 +438,6 @@ export async function adminDeductPoints(params: {
 
   if (logErr) {
     console.error("[Supabase] adminDeductPoints log error:", logErr);
-    // ไม่ throw เพื่อไม่ให้ “หักแต้มแล้วแต่โชว์ว่าล้มเหลว” (แต่คุณจะเห็น error ใน console)
   }
 
   return true;
@@ -543,7 +463,7 @@ export async function adminFetchPointHistory(volunteerId: string) {
 }
 
 // ===============================
-// Admin: Add activity (manual)
+// Admin: Add activity (manual) - existing (kept)
 // ===============================
 export async function addActivityOnce(params: {
   volunteerCode: string;
@@ -555,23 +475,18 @@ export async function addActivityOnce(params: {
   const code = params.volunteerCode.trim().toUpperCase();
   if (!code) throw new Error("volunteerCode is required");
 
-  const date = params.activityDate
-    ? new Date(params.activityDate)
-    : new Date();
-
+  const date = params.activityDate ? new Date(params.activityDate) : new Date();
   const thaiYear = date.getFullYear() + 543;
 
-  const { error } = await supabase
-    .from("activity_history")
-    .insert({
-      volunteer_code: code,
-      name: params.name ?? null,
-      branch: params.branch ?? null,
-      status: params.status ?? "VOLUNTEER",
-      activity_date: date.toISOString().slice(0, 10),
-      thai_year: thaiYear,
-      is_void: false,
-    });
+  const { error } = await supabase.from("activity_history").insert({
+    volunteer_code: code,
+    name: params.name ?? null,
+    branch: params.branch ?? null,
+    status: params.status ?? "VOLUNTEER",
+    activity_date: date.toISOString().slice(0, 10),
+    thai_year: thaiYear,
+    is_void: false,
+  });
 
   if (error) {
     console.error("[addActivityOnce] error:", error);
@@ -580,11 +495,15 @@ export async function addActivityOnce(params: {
 
   return true;
 }
+
+// ===============================
+// Create volunteer (existing signature kept, but NO is_staff anymore)
+// ===============================
 export async function createVolunteer(params: {
-  volunteerCode: string; // รหัสอาสา เช่น V000001 หรือ EXT-123
+  volunteerCode: string;
   name: string;
-  branch: string; // HO / Branch / หรือชื่อพื้นที่
-  isStaff?: boolean;
+  branch: string;
+  isStaff?: boolean; // ✅ keep for backward-compat, but ignore
 }) {
   const volunteerCode = String(params.volunteerCode ?? "").trim().toUpperCase();
   const name = String(params.name ?? "").trim();
@@ -594,13 +513,7 @@ export async function createVolunteer(params: {
   if (!name) throw new Error("กรุณากรอกชื่อ-นามสกุล");
   if (!branch) throw new Error("กรุณากรอกสังกัด/พื้นที่");
 
-  // กันซ้ำก่อน
-  const { data: exist } = await supabase
-    .from("volunteers")
-    .select("id")
-    .eq("volunteer_code", volunteerCode)
-    .maybeSingle();
-
+  const { data: exist } = await supabase.from("volunteers").select("id").eq("volunteer_code", volunteerCode).maybeSingle();
   if (exist?.id) throw new Error("รหัสนี้มีอยู่แล้ว (ซ้ำ)");
 
   const { data, error } = await supabase
@@ -610,11 +523,131 @@ export async function createVolunteer(params: {
       name,
       branch,
       points: 0,
-      is_staff: params.isStaff ?? false,
+      // ❌ removed is_staff completely
     })
     .select("id, volunteer_code, name, branch, points")
     .maybeSingle();
 
   if (error) throw new Error(error.message);
   return data;
+}
+
+// =====================================================
+// ✅ NEW: Admin functions you requested (for Admin page later)
+// =====================================================
+const toThaiYearFromYMD = (ymd: string) => {
+  // ymd: YYYY-MM-DD
+  const d = new Date(ymd + "T00:00:00");
+  return d.getFullYear() + 543;
+};
+
+export async function adminCreateVolunteer(params: { volunteer_code: string; name: string; branch: string }) {
+  const volunteer_code = String(params.volunteer_code ?? "").trim().toUpperCase();
+  const name = String(params.name ?? "").trim();
+  const branch = String(params.branch ?? "").trim();
+
+  if (!volunteer_code) throw new Error("volunteer_code is required");
+  if (!name) throw new Error("name is required");
+  if (!branch) throw new Error("branch is required");
+
+  const { data: exist, error: existErr } = await supabase
+    .from("volunteers")
+    .select("id, volunteer_code, name, branch, points")
+    .eq("volunteer_code", volunteer_code)
+    .maybeSingle();
+
+  if (existErr) throw new Error(existErr.message);
+  if (exist?.id) return exist;
+
+  const { data, error } = await supabase
+    .from("volunteers")
+    .insert({ volunteer_code, name, branch, points: 0 }) // ✅ no is_staff
+    .select("id, volunteer_code, name, branch, points")
+    .single();
+
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function adminAddActivity(params: {
+  volunteer_code: string;
+  times: number;
+  activity_date: string; // YYYY-MM-DD
+  status: "VOLUNTEER" | "ADMIN";
+}) {
+  const code = String(params.volunteer_code ?? "").trim().toUpperCase();
+  const times = Math.floor(Number(params.times));
+
+  if (!code) throw new Error("volunteer_code is required");
+  if (!params.activity_date) throw new Error("activity_date is required");
+  if (!Number.isFinite(times) || times < 1) throw new Error("times must be >= 1");
+
+  // ดึงชื่อ/สาขาจาก volunteers เพื่อให้ข้อมูล activity_history สะอาด
+  const { data: vol, error: volErr } = await supabase
+    .from("volunteers")
+    .select("volunteer_code, name, branch")
+    .eq("volunteer_code", code)
+    .maybeSingle();
+
+  if (volErr) throw new Error(volErr.message);
+  if (!vol) throw new Error("ไม่พบ volunteer ใน volunteers");
+
+  const thai_year = toThaiYearFromYMD(params.activity_date);
+
+  const rows = Array.from({ length: times }).map(() => ({
+    volunteer_code: code,
+    name: vol.name ?? null,
+    branch: vol.branch ?? null,
+    status: params.status,
+    activity_date: params.activity_date,
+    thai_year,
+    is_void: false,
+  }));
+
+  const { error } = await supabase.from("activity_history").insert(rows);
+  if (error) throw new Error(error.message);
+
+  return { inserted: times, thai_year };
+}
+
+export async function adminVoidLatestActivity(params: {
+  volunteer_code: string;
+  void_reason: string;
+  void_by: string;
+  onlyCurrentThaiYear?: boolean;
+}) {
+  const code = String(params.volunteer_code ?? "").trim().toUpperCase();
+  if (!code) throw new Error("volunteer_code is required");
+
+  const nowIso = new Date().toISOString();
+  const currentThaiYear = getCurrentThaiYear();
+
+  let q = supabase
+    .from("activity_history")
+    .select("id, activity_date, created_at, thai_year")
+    .eq("volunteer_code", code)
+    .eq("is_void", false);
+
+  if (params.onlyCurrentThaiYear) q = q.eq("thai_year", currentThaiYear);
+
+  const { data, error } = await q.order("activity_date", { ascending: false }).order("created_at", { ascending: false }).limit(1);
+
+  if (error) throw new Error(error.message);
+
+  const latest = (data ?? [])[0];
+  if (!latest?.id) return { voided: false, message: "ไม่พบรายการกิจกรรมที่ยังไม่ void" };
+
+  const { error: updErr } = await supabase
+    .from("activity_history")
+    .update({
+      is_void: true,
+      void_reason: params.void_reason || "Admin void",
+      void_by: params.void_by || "ADMIN",
+      void_at: nowIso,
+    })
+    .eq("id", latest.id);
+
+  if (updErr) throw new Error(updErr.message);
+
+  return { voided: true, activity_id: latest.id };
 }
