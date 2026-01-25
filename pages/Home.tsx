@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Search, User, Gift, Trophy, Loader2 } from "lucide-react";
-import { fetchVolunteerByCode } from "../services/dataService";
+import { fetchVolunteerByCode, mapVolunteerRowToVolunteer } from "../services/dataService";
 import type { Volunteer } from "../types";
 
 export const Home: React.FC = () => {
@@ -41,7 +41,10 @@ export const Home: React.FC = () => {
         setErrorMsg(null);
         setNotFound(false);
 
-        const data = await fetchVolunteerByCode(term);
+        // ✅ normalize search (กันเคสผู้ใช้พิมพ์เว้นวรรค/ตัวเล็กใหญ่)
+        const normalized = term.replace(/\s+/g, "").toUpperCase();
+
+        const data = await fetchVolunteerByCode(normalized);
 
         if (cancelled) return;
 
@@ -51,11 +54,8 @@ export const Home: React.FC = () => {
           return;
         }
 
-        const mapped: Volunteer = {
-          id: data.id, // uuid
-          empId: data.volunteer_code, // volunteer_code
-          type: data.branch ?? "",
-        };
+        // ✅ ใช้ helper จาก dataService.ts (กัน schema เปลี่ยน)
+        const mapped = mapVolunteerRowToVolunteer(data);
 
         setResult(mapped);
         setNotFound(false);
