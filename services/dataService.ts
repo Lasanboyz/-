@@ -186,3 +186,18 @@ export async function fetchLeaderboard(mode: LeaderboardMode) {
 // (Optional) Transfer / Points Transactions (ยังไม่เปิดใช้จริง)
 // ===============================
 // ถ้าจะทำ “โอนแต้มจริง” เราจะไปผูกกับ table point_transactions + RLS ทีหลัง
+// ===============================
+// Backward-compat (for old Leaderboard.tsx)
+// ===============================
+
+// Leaderboard.tsx เก่าๆ บางเวอร์ชันเรียก getVolunteers()
+// เราทำ alias ให้เพื่อกันหน้า /leaderboard พัง
+export async function getVolunteers() {
+  return await fetchLeaderboard('VOLUNTEERS');
+}
+
+// เผื่อ Leaderboard.tsx เรียก getAdmins() ด้วย (กันพังไว้ก่อน)
+export async function getAdmins() {
+  return await fetchLeaderboard('ADMIN');
+}
+
