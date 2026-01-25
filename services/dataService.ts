@@ -585,32 +585,13 @@ export async function adminAddActivity(params: {
   if (!params.activity_date) throw new Error("activity_date is required");
   if (!Number.isFinite(times) || times < 1) throw new Error("times must be >= 1");
 
-  // ดึงชื่อ/สาขาจาก volunteers เพื่อให้ข้อมูล activity_history สะอาด
-  const { data: vol, error: volErr } = await supabase
-    .from("volunteers")
-    .select("volunteer_code, name, branch")
-    .eq("volunteer_code", code)
-    .maybeSingle();
-
-  if (volErr) throw new Error(volErr.message);
-  if (!vol) throw new Error("ไม่พบ volunteer ใน volunteers");
-
-  const thai_year = toThaiYearFromYMD(params.activity_date);
-
-  const rows = Array.from({ length: times }).map(() => ({
+  // 🔥 สำคัญ: เรียก Server API (service role) เท่านั้น
+  return await callAdminApi<{ inserted: number; thai_year: number }>("/api/admin/addActivity", {
     volunteer_code: code,
-    name: vol.name ?? null,
-    branch: vol.branch ?? null,
-    status: params.status,
+    times,
     activity_date: params.activity_date,
-    thai_year,
-    is_void: false,
-  }));
-
-  const { error } = await supabase.from("activity_history").insert(rows);
-  if (error) throw new Error(error.message);
-
-  return { inserted: times, thai_year };
+    status: params.status,
+  });
 }
 
 export async function adminVoidLatestActivity(params: {
