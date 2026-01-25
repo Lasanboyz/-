@@ -24,6 +24,9 @@ import type { Volunteer, Transaction, RankConfig } from "../types";
 
 const POINTS_PER_ACTIVITY = 20;
 
+type TxRow = any;
+type ActivityRow = any;
+
 export const Profile: React.FC = () => {
   // route: /profile/:id  (id = volunteer_code)
   const { id } = useParams<{ id: string }>();
@@ -110,6 +113,66 @@ export const Profile: React.FC = () => {
     return txs.filter((t) => t.type === "ACTIVITY" && t.thaiYear === year).length;
   };
 
+  /**
+   * ✅ แก้บั๊ก “กดหักแล้วแต้มเพิ่ม”:
+   * - DB เก็บ amount เป็นบวกเสมอ (constraint amount > 0)
+   * - admin deduct จะมี from_volunteer_id = null และ to_volunteer_id = user
+   * - ดังนั้นต้องตัดสิน +/− จาก field type ด้วย (deduct = -)
+   */
+  const mapPointTxRowToTransaction = (t: TxRow, volunteerId: string): Transaction => {
+    const typeRaw = String(t?.type ?? "").toLowerCase();
+    const rawAmount = Number(t?.amount ?? 0);
+    const createdAt = t?.created_at ?? new Date().toISOString();
+
+    let signedAmount = Math.abs(rawAmount);
+
+    if (typeRaw === "deduct") {
+      signedAmount = -Math.abs(rawAmount);
+    } else if (typeRaw === "transfer") {
+      // transfer: ใช้ from/to ตัดสินทิศทาง
+      const isOut = String(t?.from_volunteer_id ?? "") === String(volunteerId);
+      signedAmount = isOut ? -Math.abs(rawAmount) : Math.abs(rawAmount);
+    } else if (typeRaw === "adjustment") {
+      // adjustment: ถือเป็นบวก
+      signedAmount = Math.abs(rawAmount);
+    } else {
+      // fallback: ถ้าเจอ type อื่น ๆ ให้เป็นบวกไว้ก่อน
+      signedAmount = Math.abs(rawAmount);
+    }
+
+    // description
+    const isOutTransfer = typeRaw === "transfer" && String(t?.from_volunteer_id ?? "") === String(volunteerId);
+
+    let description = t?.note ?? "-";
+    if (typeRaw === "transfer") {
+      description = isOutTransfer
+        ? `โอนให้ ${t?.to_name ?? t?.to_volunteer_code ?? "-"}`
+        : `ได้รับจาก ${t?.from_name ?? t?.from_volunteer_code ?? "-"}`;
+    } else if (typeRaw === "deduct") {
+      description = t?.note ? `หักแต้ม • ${t.note}` : "หักแต้ม";
+    } else if (typeRaw === "adjustment") {
+      description = t?.note ? `ปรับแต้ม • ${t.note}` : "ปรับแต้ม";
+    }
+
+    // เก็บ relatedId (ไว้เผื่อใช้ต่อ)
+    const relatedId =
+      typeRaw === "transfer"
+        ? (isOutTransfer ? t?.to_volunteer_id : t?.from_volunteer_id)
+        : null;
+
+    return {
+      id: t?.id,
+      volunteerId,
+      amount: signedAmount,
+      type: "TRANSFER", // ใช้ enum เดิมของคุณ (รวมทั้ง transfer/adjust/deduct อยู่ใน view ชุดเดียว)
+      description,
+      date: createdAt,
+      thaiYear: toThaiYearFromDate(createdAt),
+      createdBy: "system",
+      relatedId: relatedId ?? undefined,
+    };
+  };
+
   // =========================
   // LOAD profile from Supabase
   // =========================
@@ -162,10 +225,10 @@ export const Profile: React.FC = () => {
 
         if (actErr) console.error("Activity load error:", actErr);
 
-        const activityTx: Transaction[] = (actData ?? []).map((a: any, idx: number) => {
+        const activityTx: Transaction[] = (actData ?? []).map((a: ActivityRow, idx: number) => {
           const thaiYear =
-            Number(a.thai_year) ||
-            (a.activity_date ? toThaiYearFromDate(a.activity_date) : getCurrentThaiYear());
+            Number(a?.thai_year) ||
+            (a?.activity_date ? toThaiYearFromDate(a.activity_date) : getCurrentThaiYear());
 
           return {
             id: `act_${thaiYear}_${idx}`,
@@ -176,13 +239,13 @@ export const Profile: React.FC = () => {
               String(a?.status ?? "").toUpperCase() === "ADMIN"
                 ? "ร่วมกิจกรรมอาสา (ทีมงาน/Admin)"
                 : "ร่วมกิจกรรมอาสา",
-            date: a.activity_date ?? new Date().toISOString(),
+            date: a?.activity_date ?? new Date().toISOString(),
             thaiYear,
             createdBy: "system",
           };
         });
 
-        // 3) โหลด “ประวัติการโอน” จาก view
+        // 3) โหลด “ประวัติแต้ม” จาก view (รวม transfer/adjustment/deduct)
         const { data: txData, error: txError } = await supabaseClient
           .from("point_transactions_view")
           .select("*")
@@ -191,28 +254,12 @@ export const Profile: React.FC = () => {
 
         if (txError) console.error("TX load error:", txError);
 
-        const transferTx: Transaction[] = (txData ?? []).map((t: any) => {
-          const isOut = t.from_volunteer_id === vRow.id;
-          const amount = Number(t.amount ?? 0);
-          const createdAt = t.created_at ?? new Date().toISOString();
-
-          return {
-            id: t.id,
-            volunteerId: vRow.id,
-            amount: isOut ? -Math.abs(amount) : Math.abs(amount),
-            type: "TRANSFER",
-            description: isOut
-              ? `โอนให้ ${t.to_name ?? t.to_volunteer_code ?? "-"}`
-              : `ได้รับจาก ${t.from_name ?? t.from_volunteer_code ?? "-"}`,
-            date: createdAt,
-            thaiYear: toThaiYearFromDate(createdAt),
-            createdBy: "system",
-            relatedId: isOut ? t.to_volunteer_id : t.from_volunteer_id,
-          };
-        });
+        const pointTx: Transaction[] = (txData ?? []).map((t: TxRow) =>
+          mapPointTxRowToTransaction(t, vRow.id)
+        );
 
         // 4) รวมรายการทั้งหมด
-        const allTx = [...transferTx, ...activityTx].sort(
+        const allTx = [...pointTx, ...activityTx].sort(
           (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
         );
 
@@ -223,9 +270,9 @@ export const Profile: React.FC = () => {
         const total = sumPointsWithRule(allTx);
         const annual = sumPointsWithRule(allTx, currentYear);
 
-        // ✅ ปรับ totalPoints ให้ยึด DB เป็นหลัก (กันเคส tx ยังโหลดไม่ครบ / future)
+        // ✅ totalPoints ยึด DB เป็นหลัก
         const latest = await fetchVolunteerPointsByCode(volunteerCode);
-        const totalFromDb = latest?.points ?? total;
+        const totalFromDb = Number(latest?.points ?? total);
 
         setTotalPoints(totalFromDb);
         setAnnualPoints(annual);
@@ -277,67 +324,67 @@ export const Profile: React.FC = () => {
   // Transfer (ผูก Supabase แล้ว ✅)
   // =========================
   const handleTransferSubmit = async (e: React.FormEvent) => {
-  e.preventDefault();
-  if (!volunteer) return;
+    e.preventDefault();
+    if (!volunteer) return;
 
-  const toCode = String(transferReceiverId ?? "").trim().toUpperCase();
-  const amount = Number(transferAmount ?? 0);
+    const toCode = String(transferReceiverId ?? "").trim().toUpperCase();
+    const amount = Number(transferAmount ?? 0);
 
-  if (!toCode) {
-    alert("กรุณาระบุรหัสพนักงานผู้รับ");
-    return;
-  }
-  if (toCode === String(volunteer.empId).trim().toUpperCase()) {
-    alert("ห้ามโอนให้ตัวเอง");
-    return;
-  }
-  if (!Number.isFinite(amount) || amount <= 0) {
-    alert("กรุณาระบุจำนวนแต้มที่ถูกต้อง");
-    return;
-  }
-  if (amount > Math.max(totalPoints, 0)) {
-    alert(`แต้มไม่พอ (โอนได้สูงสุด ${totalPoints})`);
-    return;
-  }
+    if (!toCode) {
+      alert("กรุณาระบุรหัสพนักงานผู้รับ");
+      return;
+    }
+    if (toCode === String(volunteer.empId).trim().toUpperCase()) {
+      alert("ห้ามโอนให้ตัวเอง");
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      alert("กรุณาระบุจำนวนแต้มที่ถูกต้อง");
+      return;
+    }
+    if (amount > Math.max(totalPoints, 0)) {
+      alert(`แต้มไม่พอ (โอนได้สูงสุด ${totalPoints})`);
+      return;
+    }
 
-  // เช็กผู้รับว่ามีจริง
-  const receiverRow = await fetchVolunteerByCode(toCode);
-  if (!receiverRow) {
-    alert("ไม่พบรหัสผู้รับในระบบ");
-    return;
-  }
+    // เช็กผู้รับว่ามีจริง
+    const receiverRow = await fetchVolunteerByCode(toCode);
+    if (!receiverRow) {
+      alert("ไม่พบรหัสผู้รับในระบบ");
+      return;
+    }
 
-  if (
-    !confirm(
-      `ยืนยันการโอน ${amount} แต้ม ให้รหัส ${toCode}?\n\n⚠️ เมื่อโอนแล้วจะไม่สามารถเรียกคืนได้!`
+    if (
+      !confirm(
+        `ยืนยันการโอน ${amount} แต้ม ให้รหัส ${toCode}?\n\n⚠️ เมื่อโอนแล้วจะไม่สามารถเรียกคืนได้!`
+      )
     )
-  ) return;
+      return;
 
-  try {
-    setTransferSubmitting(true);
+    try {
+      setTransferSubmitting(true);
 
-    await transferPoints({
-      fromVolunteerCode: volunteer.empId,
-      toVolunteerCode: toCode,
-      amount,
-      note: `transfer by ${volunteer.empId}`,
-    });
+      await transferPoints({
+        fromVolunteerCode: volunteer.empId,
+        toVolunteerCode: toCode,
+        amount,
+        note: `transfer by ${volunteer.empId}`,
+      });
 
-    setShowTransferModal(false);
-    setTransferReceiverId("");
-    setTransferAmount("");
+      setShowTransferModal(false);
+      setTransferReceiverId("");
+      setTransferAmount("");
 
-    setReloadTick((x) => x + 1);
+      setReloadTick((x) => x + 1);
 
-    alert("โอนแต้มสำเร็จ ✅");
-  } catch (err: any) {
-    console.error("transfer error:", err);
-    alert(err?.message ?? "โอนไม่สำเร็จ");
-  } finally {
-    setTransferSubmitting(false);
-  }
-};
-
+      alert("โอนแต้มสำเร็จ ✅");
+    } catch (err: any) {
+      console.error("transfer error:", err);
+      alert(err?.message ?? "โอนไม่สำเร็จ");
+    } finally {
+      setTransferSubmitting(false);
+    }
+  };
 
   // =========================
   // UI states
@@ -416,9 +463,7 @@ export const Profile: React.FC = () => {
             <div className="text-right">
               <p className="text-sm text-gray-500 mb-1">แต้มสะสมปีนี้</p>
               <span
-                className={`text-3xl font-bold ${
-                  isNoScoreYear ? "text-gray-400" : "text-primary"
-                }`}
+                className={`text-3xl font-bold ${isNoScoreYear ? "text-gray-400" : "text-primary"}`}
               >
                 {isNoScoreYear ? "ไม่ระบุ" : annualPoints}
               </span>
