@@ -1,14 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  ArrowLeft,
-  Trophy,
-  Medal,
-  Calendar,
-  Flag,
-  Users,
-  Briefcase,
-} from "lucide-react";
+import { ArrowLeft, Trophy, Medal, Calendar, Flag, Users, Briefcase } from "lucide-react";
 
 import {
   fetchLeaderboardSummary,
@@ -46,10 +38,11 @@ export const Leaderboard: React.FC = () => {
   const [selectedYear, setSelectedYear] = useState<number>(currentThaiYear);
   const [viewType, setViewType] = useState<ViewType>("VOLUNTEER");
 
-  const isNoScoreYear = selectedYear >= 2557 && selectedYear <= 2568;
   const isAllYears = selectedYear === 0;
+  const isNoScoreYear = !isAllYears && selectedYear >= 2557 && selectedYear <= 2568;
 
-  const highlightActivityCount = isNoScoreYear || isAllYears;
+  // ปีงดคะแนน หรือ รวมทุกปี => ไฮไลต์จำนวนครั้ง
+  const highlightActivityCount = isAllYears || isNoScoreYear;
 
   const mode: LeaderboardMode = viewType === "STAFF" ? "ADMIN" : "VOLUNTEERS";
 
@@ -61,42 +54,38 @@ export const Leaderboard: React.FC = () => {
         setLoading(true);
         setErrorMsg(null);
 
-        // ✅ ดึงจาก activity_history แล้วคำนวณเอง (แก้ปัญหา view/SQL)
         const rows: any[] = await fetchLeaderboardSummary(mode, selectedYear);
-
         if (cancelled) return;
 
+        // debug (เอาออกทีหลังได้)
+        console.log("[Leaderboard] mode/year/rows:", mode, selectedYear, rows?.length ?? 0);
+
         const mapped: LeaderboardItem[] = (rows ?? []).map((r: any) => {
-          const empId = r.volunteer_code ?? "";
+          const empId = String(r.volunteer_code ?? "").trim();
 
           const points = Number(r.points ?? 0);
           const activityCount = Number(r.activity_count ?? 0);
 
           const volunteer: Volunteer = {
-            id: empId, // ใช้เป็น key พอ
+            id: empId || crypto.randomUUID(), // กัน key ว่าง
             empId,
             name: r.name ?? "",
             type: r.branch ?? "",
             ...(typeof r.is_staff === "boolean" ? { isStaff: r.is_staff } : {}),
           } as any;
 
-          // ปีไม่คิดคะแนน -> points ต้องเป็น 0 (ฟังก์ชันด้านบนคุมไว้แล้ว แต่กันไว้ซ้ำ)
-          const pointsAfterRule =
-            selectedYear !== 0 && selectedYear >= 2557 && selectedYear <= 2568 ? 0 : points;
+          // กันซ้ำ: ปีงดคะแนน -> 0
+          const pointsAfterRule = isNoScoreYear ? 0 : points;
 
           const rank = getRank(pointsAfterRule, activityCount);
 
-          return {
-            volunteer,
-            points: pointsAfterRule,
-            activityCount,
-            rank,
-          };
+          return { volunteer, points: pointsAfterRule, activityCount, rank };
         });
 
-        // sort
         mapped.sort((a, b) =>
-          highlightActivityCount ? b.activityCount - a.activityCount : b.points - a.points
+          highlightActivityCount
+            ? b.activityCount - a.activityCount
+            : b.points - a.points
         );
 
         setItems(mapped);
@@ -114,7 +103,18 @@ export const Leaderboard: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [mode, selectedYear, highlightActivityCount]);
+  }, [mode, selectedYear, highlightActivityCount, isNoScoreYear]);
+
+  // ใช้ใน render (กัน list ว่างเพราะ filter)
+  const visibleItems = useMemo(() => {
+    return items.filter((i) =>
+      highlightActivityCount ? i.activityCount > 0 : i.points > 0
+    );
+  }, [items, highlightActivityCount]);
+
+  const emptyText = isAllYears
+    ? "ยังไม่มีข้อมูลกิจกรรม"
+    : `ยังไม่มีข้อมูลกิจกรรมในปี ${selectedYear}`;
 
   return (
     <div className="space-y-6">
@@ -190,7 +190,7 @@ export const Leaderboard: React.FC = () => {
           {highlightActivityCount ? "เรียงตามจำนวนครั้งที่เข้าร่วมกิจกรรม" : "เรียงตามคะแนนสะสมสูงสุด"}
         </p>
 
-        {isNoScoreYear && !isAllYears && (
+        {isNoScoreYear && (
           <div className="mt-2 inline-block bg-white/20 px-3 py-1 rounded-full text-xs font-medium backdrop-blur-sm relative z-10">
             ปีนี้งดเว้นคะแนน (นับจำนวนครั้ง)
           </div>
@@ -208,81 +208,79 @@ export const Leaderboard: React.FC = () => {
             <Trophy size={48} className="mb-2 opacity-20" />
             <p>{errorMsg}</p>
           </div>
-        ) : items.length === 0 ? (
+        ) : visibleItems.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full py-12 text-gray-400">
             <Trophy size={48} className="mb-2 opacity-20" />
-            <p>ยังไม่มีข้อมูลกิจกรรมในปี {selectedYear}</p>
+            <p>{emptyText}</p>
           </div>
         ) : (
           <div className="divide-y divide-gray-50">
-            {items
-              .filter((i) => (highlightActivityCount ? i.activityCount > 0 : i.points > 0))
-              .map((item, index) => (
+            {visibleItems.map((item, index) => (
+              <div
+                key={`${item.volunteer.empId}_${index}`}
+                className="p-4 flex items-center gap-4 hover:bg-pink-50/50 transition animate-fade-in-up"
+                style={{ animationDelay: `${index * 0.05}s` }}
+              >
                 <div
-                  key={`${item.volunteer.empId}_${index}`}
-                  className="p-4 flex items-center gap-4 hover:bg-pink-50/50 transition animate-fade-in-up"
-                  style={{ animationDelay: `${index * 0.05}s` }}
+                  className={`w-10 h-10 flex-shrink-0 flex items-center justify-center rounded-full font-bold text-lg ${
+                    index === 0
+                      ? "bg-yellow-100 text-yellow-600 shadow-sm"
+                      : index === 1
+                      ? "bg-gray-100 text-gray-600 shadow-sm"
+                      : index === 2
+                      ? "bg-orange-100 text-orange-600 shadow-sm"
+                      : "bg-white text-gray-400 border border-gray-100"
+                  }`}
                 >
-                  <div
-                    className={`w-10 h-10 flex-shrink-0 flex items-center justify-center rounded-full font-bold text-lg ${
-                      index === 0
-                        ? "bg-yellow-100 text-yellow-600 shadow-sm"
-                        : index === 1
-                        ? "bg-gray-100 text-gray-600 shadow-sm"
-                        : index === 2
-                        ? "bg-orange-100 text-orange-600 shadow-sm"
-                        : "bg-white text-gray-400 border border-gray-100"
-                    }`}
-                  >
-                    {index < 3 ? <Medal size={20} /> : index + 1}
+                  {index < 3 ? <Medal size={20} /> : index + 1}
+                </div>
+
+                <div className="flex-grow min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-lg font-bold text-gray-800">
+                      {item.volunteer.empId}
+                    </span>
                   </div>
 
-                  <div className="flex-grow min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-lg font-bold text-gray-800">
-                        {item.volunteer.empId}
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-2 mt-1">
-                      <span
-                        className={`text-[10px] px-2 py-0.5 rounded-full ${item.rank.color} flex items-center gap-1`}
-                      >
-                        {item.rank.icon} {item.rank.name}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="text-right flex-shrink-0 flex flex-col items-end">
-                    {highlightActivityCount ? (
-                      <>
-                        <div className="flex items-center gap-1 text-2xl font-bold text-pink-600 leading-none">
-                          {item.activityCount}
-                          <span className="text-sm font-medium text-gray-500 mt-1">ครั้ง</span>
-                        </div>
-
-                        {!isNoScoreYear ? (
-                          <div className="mt-1 text-[10px] text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
-                            รวม {item.points} คะแนน
-                          </div>
-                        ) : (
-                          <div className="mt-1 text-[10px] text-gray-300">ไม่นำคะแนนมาคิด</div>
-                        )}
-                      </>
-                    ) : (
-                      <>
-                        <div className="flex items-center gap-1 text-2xl font-bold text-primary leading-none">
-                          {item.points}
-                          <span className="text-sm font-medium text-gray-500 mt-1">คะแนน</span>
-                        </div>
-                        <div className="mt-1 text-xs text-pink-600 bg-pink-50 px-2 py-0.5 rounded-full flex items-center gap-1">
-                          <Flag size={10} /> {item.activityCount} ครั้ง
-                        </div>
-                      </>
-                    )}
+                  <div className="flex items-center gap-2 mt-1">
+                    <span
+                      className={`text-[10px] px-2 py-0.5 rounded-full ${item.rank.color} flex items-center gap-1`}
+                    >
+                      {item.rank.icon} {item.rank.name}
+                    </span>
                   </div>
                 </div>
-              ))}
+
+                <div className="text-right flex-shrink-0 flex flex-col items-end">
+                  {highlightActivityCount ? (
+                    <>
+                      <div className="flex items-center gap-1 text-2xl font-bold text-pink-600 leading-none">
+                        {item.activityCount}
+                        <span className="text-sm font-medium text-gray-500 mt-1">ครั้ง</span>
+                      </div>
+
+                      {!isNoScoreYear ? (
+                        <div className="mt-1 text-[10px] text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
+                          รวม {item.points} คะแนน
+                        </div>
+                      ) : (
+                        <div className="mt-1 text-[10px] text-gray-300">ไม่นำคะแนนมาคิด</div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-1 text-2xl font-bold text-primary leading-none">
+                        {item.points}
+                        <span className="text-sm font-medium text-gray-500 mt-1">คะแนน</span>
+                      </div>
+                      <div className="mt-1 text-xs text-pink-600 bg-pink-50 px-2 py-0.5 rounded-full flex items-center gap-1">
+                        <Flag size={10} /> {item.activityCount} ครั้ง
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
