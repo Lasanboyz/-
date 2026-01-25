@@ -23,9 +23,8 @@ import {
   adminFetchPointHistory,
   createVolunteer,
 
-  // ✅ new
+  // ✅ activity (new)
   fetchActivityHistoryByCode,
-  getCurrentThaiYear,
   adminAddActivityViaApi,
   adminVoidActivityById,
   adminUpdateVolunteerRole,
@@ -127,10 +126,10 @@ export const Admin: React.FC = () => {
   const refreshActivity = async (volunteerCode: string) => {
     setLoadingActivity(true);
     try {
-      const thaiYear = getCurrentThaiYear();
-      const rows = await fetchActivityHistoryByCode(volunteerCode, thaiYear);
-      setActivityRows(rows);
-      setActivityCount(rows.length);
+      // ✅ signature ใหม่: fetchActivityHistoryByCode(code) (ไม่มีปี)
+      const rows = await fetchActivityHistoryByCode(volunteerCode);
+      setActivityRows(rows ?? []);
+      setActivityCount((rows ?? []).length);
     } finally {
       setLoadingActivity(false);
     }
@@ -320,11 +319,8 @@ export const Admin: React.FC = () => {
     setLoading(true);
     setMsg(null);
     try {
-      await adminVoidActivityById({
-        activity_id: activityId,
-        void_reason: "Admin deleted",
-        void_by: "ADMIN",
-      });
+      // ✅ signature ใหม่: adminVoidActivityById(activity_id)
+      await adminVoidActivityById(activityId);
 
       await refreshActivity(v.empId);
       setMsg("ลบกิจกรรมสำเร็จ ✅");
@@ -394,7 +390,7 @@ export const Admin: React.FC = () => {
                 onChange={(e) => setSearchCode(e.target.value)}
                 onKeyDown={(e) => (e.key === "Enter" ? handleSearch() : null)}
                 className="w-full border rounded-xl p-3 pl-10 outline-none focus:ring-2 focus:ring-primary"
-                placeholder="เช่น 80006423 หรือ V000001"
+                placeholder="เช่น 80010301 หรือ CF000001"
               />
               <Search
                 size={18}
@@ -511,7 +507,8 @@ export const Admin: React.FC = () => {
 
                 {/* ✅ activity count */}
                 <div className="mt-2 text-sm text-gray-500">
-                  จำนวนครั้งกิจกรรมปีนี้: <span className="font-bold text-gray-800">{activityCount}</span>
+                  จำนวนครั้งกิจกรรม:{" "}
+                  <span className="font-bold text-gray-800">{activityCount}</span>
                   <button
                     onClick={() => refreshActivity(v.empId)}
                     className="ml-3 text-xs text-gray-500 hover:text-gray-800"
@@ -631,7 +628,7 @@ export const Admin: React.FC = () => {
       {v && (
         <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
           <div className="flex items-center justify-between mb-3">
-            <div className="font-bold text-gray-800">ประวัติกิจกรรมอาสา (ปีปัจจุบัน)</div>
+            <div className="font-bold text-gray-800">ประวัติกิจกรรมอาสา</div>
             <button
               onClick={() => refreshActivity(v.empId)}
               className="text-xs text-gray-500 hover:text-gray-800"
@@ -647,32 +644,38 @@ export const Admin: React.FC = () => {
             <div className="text-sm text-gray-400">ยังไม่มีประวัติกิจกรรม</div>
           ) : (
             <div className="space-y-2">
-              {activityRows.map((a: any) => (
-                <div key={a.id} className="border rounded-xl p-3 flex items-center justify-between">
-                  <div>
-                    <div className="text-sm font-bold text-gray-800">
-                      {a.status} • {a.activity_date}
+              {activityRows.map((a: any) => {
+                const id = String(a.activity_id ?? a.id ?? "");
+                return (
+                  <div key={id} className="border rounded-xl p-3 flex items-center justify-between">
+                    <div>
+                      <div className="text-sm font-bold text-gray-800">
+                        {a.status} • {a.activity_date}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        created: {a.created_at ? new Date(a.created_at).toLocaleString("th-TH") : "-"}
+                      </div>
+                      {a.is_void ? (
+                        <div className="text-xs text-red-500 mt-1">* void แล้ว</div>
+                      ) : null}
                     </div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      created: {new Date(a.created_at).toLocaleString("th-TH")}
-                    </div>
-                  </div>
 
-                  <button
-                    onClick={() => handleVoidActivity(a.id)}
-                    className="inline-flex items-center gap-2 text-sm text-red-600 hover:text-red-700"
-                    disabled={loading}
-                    title="ลบ (void)"
-                  >
-                    <Trash2 size={16} /> ลบ
-                  </button>
-                </div>
-              ))}
+                    <button
+                      onClick={() => handleVoidActivity(id)}
+                      className="inline-flex items-center gap-2 text-sm text-red-600 hover:text-red-700"
+                      disabled={loading || !id}
+                      title="ลบ (void)"
+                    >
+                      <Trash2 size={16} /> ลบ
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           )}
 
           <div className="mt-3 text-xs text-gray-400">
-            * การลบคือการ “void” ทำให้หายจาก Profile และ Leaderboard ทันที (เพราะระบบนับเฉพาะ is_void=false)
+            * การลบคือการ “void” ทำให้หายจาก Profile และ Leaderboard ทันที (ระบบนับเฉพาะ is_void=false)
           </div>
         </div>
       )}
@@ -697,7 +700,7 @@ export const Admin: React.FC = () => {
                       {t.type} • {t.note ?? "-"}
                     </div>
                     <div className="text-xs text-gray-400 mt-1">
-                      {new Date(t.created_at).toLocaleString("th-TH")}
+                      {t.created_at ? new Date(t.created_at).toLocaleString("th-TH") : "-"}
                     </div>
                     <div className="text-xs text-gray-500 mt-1">
                       from: {t.from_volunteer_code ?? "-"} → to: {t.to_volunteer_code ?? "-"}
@@ -714,8 +717,8 @@ export const Admin: React.FC = () => {
           )}
 
           <div className="mt-3 text-xs text-gray-400">
-            * (หมายเหตุ) ลบ “ประวัติแต้ม” แบบหายจริงต้องเพิ่มระบบ void ใน point_transactions ด้วย
-            แต่ตอนนี้คุณขอให้ Leaderboard หาย = เราลบกิจกรรม (activity_history) ให้ได้ก่อนแบบจบ ๆ
+            * (หมายเหตุ) ลบ “ประวัติแต้ม” แบบหายจริงต้องเพิ่มระบบ void ใน point_transactions
+            แต่ตอนนี้ “ลบกิจกรรม” เพื่อให้ Leaderboard หาย = ทำงานครบแล้ว
           </div>
         </div>
       )}
