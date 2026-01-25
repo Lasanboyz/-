@@ -157,6 +157,7 @@ export const Profile: React.FC = () => {
           .from("activity_history")
           .select("activity_date, thai_year, status")
           .eq("volunteer_code", volunteerCode)
+          .eq("is_void", false)
           .order("activity_date", { ascending: false });
 
         if (actErr) console.error("Activity load error:", actErr);
