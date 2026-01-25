@@ -275,70 +275,68 @@ export const Profile: React.FC = () => {
   // =========================
   // Transfer (ผูก Supabase แล้ว ✅)
   // =========================
-  const handleTransferSubmit = async (e:/compiler React.FormEvent) => {
-    e.preventDefault();
-    if (!volunteer) return;
+  const handleTransferSubmit = async (e: React.FormEvent) => {
+  e.preventDefault();
+  if (!volunteer) return;
 
-    const toCode = String(transferReceiverId ?? "").trim().toUpperCase();
-    const amount = Number(transferAmount ?? 0);
+  const toCode = String(transferReceiverId ?? "").trim().toUpperCase();
+  const amount = Number(transferAmount ?? 0);
 
-    if (!toCode) {
-      alert("กรุณาระบุรหัสพนักงานผู้รับ");
-      return;
-    }
-    if (toCode === String(volunteer.empId).trim().toUpperCase()) {
-      alert("ห้ามโอนให้ตัวเอง");
-      return;
-    }
-    if (!Number.isFinite(amount) || amount <= 0) {
-      alert("กรุณาระบุจำนวนแต้มที่ถูกต้อง");
-      return;
-    }
-    if (amount > Math.max(totalPoints, 0)) {
-      alert(`แต้มไม่พอ (โอนได้สูงสุด ${totalPoints})`);
-      return;
-    }
+  if (!toCode) {
+    alert("กรุณาระบุรหัสพนักงานผู้รับ");
+    return;
+  }
+  if (toCode === String(volunteer.empId).trim().toUpperCase()) {
+    alert("ห้ามโอนให้ตัวเอง");
+    return;
+  }
+  if (!Number.isFinite(amount) || amount <= 0) {
+    alert("กรุณาระบุจำนวนแต้มที่ถูกต้อง");
+    return;
+  }
+  if (amount > Math.max(totalPoints, 0)) {
+    alert(`แต้มไม่พอ (โอนได้สูงสุด ${totalPoints})`);
+    return;
+  }
 
-    // ✅ เช็กว่าผู้รับมีอยู่จริง
-    const receiverRow = await fetchVolunteerByCode(toCode);
-    if (!receiverRow) {
-      alert("ไม่พบรหัสผู้รับในระบบ");
-      return;
-    }
+  // เช็กผู้รับว่ามีจริง
+  const receiverRow = await fetchVolunteerByCode(toCode);
+  if (!receiverRow) {
+    alert("ไม่พบรหัสผู้รับในระบบ");
+    return;
+  }
 
-    if (
-      !confirm(
-        `ยืนยันการโอน ${amount} แต้ม ให้รหัส ${toCode}?\n\n⚠️ เมื่อโอนแล้วจะไม่สามารถเรียกคืนได้!`
-      )
-    ) return;
+  if (
+    !confirm(
+      `ยืนยันการโอน ${amount} แต้ม ให้รหัส ${toCode}?\n\n⚠️ เมื่อโอนแล้วจะไม่สามารถเรียกคืนได้!`
+    )
+  ) return;
 
-    try {
-      setTransferSubmitting(true);
+  try {
+    setTransferSubmitting(true);
 
-      // ✅ insert เข้า point_transactions (trigger จะอัปเดต volunteers.points)
-      await transferPoints({
-        fromVolunteerCode: volunteer.empId,
-        toVolunteerCode: toCode,
-        amount,
-        note: `transfer by ${volunteer.empId}`,
-      });
+    await transferPoints({
+      fromVolunteerCode: volunteer.empId,
+      toVolunteerCode: toCode,
+      amount,
+      note: `transfer by ${volunteer.empId}`,
+    });
 
-      // ปิด modal + เคลียร์ฟอร์ม
-      setShowTransferModal(false);
-      setTransferReceiverId("");
-      setTransferAmount("");
+    setShowTransferModal(false);
+    setTransferReceiverId("");
+    setTransferAmount("");
 
-      // ✅ reload ทั้งหน้า profile (โหลด tx + points ใหม่)
-      setReloadTick((x) => x + 1);
+    setReloadTick((x) => x + 1);
 
-      alert("โอนแต้มสำเร็จ ✅");
-    } catch (err: any) {
-      console.error("transfer error:", err);
-      alert(err?.message ?? "โอนไม่สำเร็จ");
-    } finally {
-      setTransferSubmitting(false);
-    }
-  };
+    alert("โอนแต้มสำเร็จ ✅");
+  } catch (err: any) {
+    console.error("transfer error:", err);
+    alert(err?.message ?? "โอนไม่สำเร็จ");
+  } finally {
+    setTransferSubmitting(false);
+  }
+};
+
 
   // =========================
   // UI states
