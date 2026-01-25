@@ -126,7 +126,6 @@ export const Admin: React.FC = () => {
   const refreshActivity = async (volunteerCode: string) => {
     setLoadingActivity(true);
     try {
-      // ✅ signature ใหม่: fetchActivityHistoryByCode(code) (ไม่มีปี)
       const rows = await fetchActivityHistoryByCode(volunteerCode);
       setActivityRows(rows ?? []);
       setActivityCount((rows ?? []).length);
@@ -164,7 +163,7 @@ export const Admin: React.FC = () => {
       setRole((["VOLUNTEER", "STAFF", "ADMIN"].includes(r) ? r : "VOLUNTEER") as VolunteerRole);
 
       await Promise.all([
-        refreshPointsAndHistory(row.id, code),
+        refreshPointsAndHistory((row as any).id, code),
         refreshActivity(code),
       ]);
 
@@ -202,7 +201,7 @@ export const Admin: React.FC = () => {
       setRole((["VOLUNTEER", "STAFF", "ADMIN"].includes(r) ? r : "VOLUNTEER") as VolunteerRole);
 
       await Promise.all([
-        refreshPointsAndHistory(row.id, code),
+        refreshPointsAndHistory((row as any).id, code),
         refreshActivity(code),
       ]);
 
@@ -314,13 +313,24 @@ export const Admin: React.FC = () => {
 
   const handleVoidActivity = async (activityId: string) => {
     if (!v) return;
+
+    const id = String(activityId ?? "").trim();
+    if (!id) {
+      setMsg("ไม่พบ activity_id ของรายการนี้");
+      return;
+    }
+
     if (!confirm("ยืนยันลบกิจกรรมนี้? (จะหายจาก Leaderboard/โปรไฟล์ทันที)")) return;
 
     setLoading(true);
     setMsg(null);
     try {
-      // ✅ signature ใหม่: adminVoidActivityById(activity_id)
-      await adminVoidActivityById(activityId);
+      // ✅ FIX: dataService ต้องรับ object { activity_id }
+      await adminVoidActivityById({
+        activity_id: id,
+        void_reason: "Admin deleted",
+        void_by: "ADMIN",
+      });
 
       await refreshActivity(v.empId);
       setMsg("ลบกิจกรรมสำเร็จ ✅");
@@ -392,10 +402,7 @@ export const Admin: React.FC = () => {
                 className="w-full border rounded-xl p-3 pl-10 outline-none focus:ring-2 focus:ring-primary"
                 placeholder="เช่น 80010301 หรือ CF000001"
               />
-              <Search
-                size={18}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-              />
+              <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             </div>
           </div>
 
@@ -465,10 +472,7 @@ export const Admin: React.FC = () => {
               <UserPlus size={18} /> สร้างอาสาใหม่
             </button>
 
-            <button
-              onClick={() => setShowCreate(false)}
-              className="text-gray-500 hover:text-gray-800"
-            >
+            <button onClick={() => setShowCreate(false)} className="text-gray-500 hover:text-gray-800">
               ยกเลิก
             </button>
           </div>
@@ -507,8 +511,7 @@ export const Admin: React.FC = () => {
 
                 {/* ✅ activity count */}
                 <div className="mt-2 text-sm text-gray-500">
-                  จำนวนครั้งกิจกรรม:{" "}
-                  <span className="font-bold text-gray-800">{activityCount}</span>
+                  จำนวนครั้งกิจกรรม: <span className="font-bold text-gray-800">{activityCount}</span>
                   <button
                     onClick={() => refreshActivity(v.empId)}
                     className="ml-3 text-xs text-gray-500 hover:text-gray-800"
@@ -645,7 +648,9 @@ export const Admin: React.FC = () => {
           ) : (
             <div className="space-y-2">
               {activityRows.map((a: any) => {
-                const id = String(a.activity_id ?? a.id ?? "");
+                // ✅ DB select มี field "id" แน่นอน (fetchActivityHistoryByCode select id)
+                const id = String(a.id ?? "").trim();
+
                 return (
                   <div key={id} className="border rounded-xl p-3 flex items-center justify-between">
                     <div>
@@ -655,9 +660,6 @@ export const Admin: React.FC = () => {
                       <div className="text-xs text-gray-500 mt-1">
                         created: {a.created_at ? new Date(a.created_at).toLocaleString("th-TH") : "-"}
                       </div>
-                      {a.is_void ? (
-                        <div className="text-xs text-red-500 mt-1">* void แล้ว</div>
-                      ) : null}
                     </div>
 
                     <button
