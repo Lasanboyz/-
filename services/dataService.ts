@@ -157,7 +157,10 @@ export function mapVolunteerRowToVolunteer(row: any): Volunteer {
 // ===============================
 // Supabase: Activity History (Profile/History page)
 // ===============================
-export async function fetchActivityHistoryByCode(volunteerCode: string, thaiYear?: number) {
+export async function fetchActivityHistoryByCode(
+  volunteerCode: string,
+  thaiYear?: number
+) {
   const code = (volunteerCode ?? "").trim();
   if (!code) return [];
 
@@ -178,7 +181,10 @@ export async function fetchActivityHistoryByCode(volunteerCode: string, thaiYear
   return data ?? [];
 }
 
-export async function getVolunteerSummaryFromHistory(volunteerCode: string, thaiYear: number) {
+export async function getVolunteerSummaryFromHistory(
+  volunteerCode: string,
+  thaiYear: number
+) {
   const rowsThisYear = await fetchActivityHistoryByCode(volunteerCode, thaiYear);
   const activityCount = rowsThisYear.length;
 
@@ -190,7 +196,7 @@ export async function getVolunteerSummaryFromHistory(volunteerCode: string, thai
 }
 
 // ===============================
-// Leaderboard (Compute from activity_history directly) ✅
+// Leaderboard (Compute from activity_history directly)
 // ===============================
 export type LeaderboardMode = "VOLUNTEERS" | "ADMIN";
 
@@ -210,10 +216,11 @@ type ActivityRow = {
   branch: string | null;
   status: string | null;
   activity_date: string | null; // "YYYY-MM-DD"
-  thai_year: number | string | null; // <- สำคัญ: บางทีมาเป็น string
+  thai_year: number | string | null;
 };
 
 // ---- helpers ----
+const __debug = false; // ตั้ง true ชั่วคราวตอนเช็ก
 const normalizeCode = (v: any) => String(v ?? "").trim().toUpperCase();
 const normalizeStatus = (v: any) => String(v ?? "").trim().toUpperCase();
 const isNoScoreYear = (year: number) => year >= 2557 && year <= 2568;
@@ -226,14 +233,12 @@ const parseThaiYear = (v: any): number | undefined => {
 
 const thaiYearFromActivityDate = (activityDate: any): number | undefined => {
   if (!activityDate) return undefined;
-  // date from DB => "YYYY-MM-DD"
   const d = new Date(`${activityDate}T00:00:00Z`);
   if (Number.isNaN(d.getTime())) return undefined;
   return d.getUTCFullYear() + 543;
 };
 
 const deriveThaiYear = (r: ActivityRow): number | undefined => {
-  // priority: thai_year column (parse to number) -> fallback activity_date
   return parseThaiYear(r.thai_year) ?? thaiYearFromActivityDate(r.activity_date);
 };
 
@@ -241,18 +246,15 @@ export async function fetchLeaderboardSummary(
   mode: LeaderboardMode,
   thaiYear: number // 0 = all years
 ): Promise<LeaderboardSummaryRow[]> {
-
-  // 1) สร้าง query
+  // ✅ สำคัญ: ปีที่เลือก filter ที่ DB ตรง ๆ (ตามที่คุณเช็กใน SQL แล้วว่ามี)
   let q = supabase
     .from("activity_history")
     .select("volunteer_code, name, branch, status, activity_date, thai_year");
 
-  // ✅ 2) ถ้าเลือกปี -> filter ที่ DB ตรง ๆ (นี่แหละที่ทำให้ปีขึ้นชัวร์)
   if (thaiYear && thaiYear !== 0) {
     q = q.eq("thai_year", thaiYear);
   }
 
-  // 3) ดึงข้อมูล
   const { data, error } = await q.limit(50000);
 
   if (error) {
@@ -262,13 +264,13 @@ export async function fetchLeaderboardSummary(
 
   const rows: ActivityRow[] = (data ?? []) as any[];
 
-  // ✅ log ให้เห็นเลยว่า DB ส่งแถวของปีนั้นมาจริงไหม
-  console.log("[LB] fetched rows:", { mode, thaiYear, rows: rows.length });
-  // probe 80010301
-  console.log(
-    "[LB] probe 80010301 count:",
-    rows.filter((r) => String(r.volunteer_code ?? "").trim() === "80010301").length
-  );
+  if (__debug) {
+    console.log("[LB] fetched:", { mode, thaiYear, rows: rows.length });
+    console.log(
+      "[LB] 80010301 count:",
+      rows.filter((r) => String(r.volunteer_code ?? "").trim() === "80010301").length
+    );
+  }
 
   const map = new Map<string, LeaderboardSummaryRow>();
 
@@ -279,9 +281,12 @@ export async function fetchLeaderboardSummary(
     const status = normalizeStatus(r.status);
     const rowIsAdmin = status === "ADMIN";
 
-    // mode filter (แยกอาสา/แอดมิน)
+    // mode filter
     if (mode === "ADMIN" && !rowIsAdmin) continue;
     if (mode === "VOLUNTEERS" && rowIsAdmin) continue;
+
+    const rowYear = deriveThaiYear(r);
+    const effectiveYear = thaiYear !== 0 ? thaiYear : rowYear;
 
     const prev =
       map.get(code) ??
@@ -291,14 +296,13 @@ export async function fetchLeaderboardSummary(
         branch: r.branch ?? "",
         activity_count: 0,
         points: 0,
-        thai_year: thaiYear !== 0 ? thaiYear : undefined,
+        thai_year: thaiYear !== 0 ? thaiYear : effectiveYear,
         is_staff: mode === "ADMIN",
       } as LeaderboardSummaryRow);
 
     prev.activity_count += 1;
 
-    // points rule: ปี 2557–2568 ไม่นับคะแนน
-    const effectiveYear = thaiYear !== 0 ? thaiYear : parseThaiYear(r.thai_year);
+    // คะแนน: ปี 2557–2568 ไม่นับคะแนน แต่ยังนับครั้ง
     if (typeof effectiveYear === "number" && !isNoScoreYear(effectiveYear)) {
       prev.points += 20;
     }
@@ -310,9 +314,6 @@ export async function fetchLeaderboardSummary(
   }
 
   return Array.from(map.values());
-}
-
-rom(map.values());
 }
 
 // ===============================
