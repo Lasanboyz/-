@@ -108,7 +108,7 @@ export async function fetchVolunteerByCode(volunteerCode: string) {
 
   const { data, error } = await supabase
     .from("volunteers")
-    .select("id, volunteer_code, name, branch") // ✅ no is_staff
+    .select("id, volunteer_code, name, branch, role")
     .eq("volunteer_code", code)
     .maybeSingle();
 
