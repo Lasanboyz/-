@@ -5,17 +5,12 @@ import { supabase } from "./supabaseClient";
 // ===============================
 // Utils (Thai Year)
 // ===============================
-export const getCurrentThaiYear = () => {
-  const date = new Date();
-  return date.getFullYear() + 543;
-};
+export const getCurrentThaiYear = () => new Date().getFullYear() + 543;
 
-export const getFiscalYear = (date: Date) => {
-  return date.getFullYear() + 543;
-};
+export const getFiscalYear = (date: Date) => date.getFullYear() + 543;
 
 // ===============================
-// Local fallback (Rewards / Requests) - keep as is for now
+// Local fallback (Rewards / Requests)
 // ===============================
 class DataService {
   private rewards: Reward[] = [];
@@ -76,16 +71,13 @@ class DataService {
   public getRewards() {
     return this.rewards;
   }
-
   public getRequests() {
     return this.redemptionRequests;
   }
-
   public addRequest(req: RedemptionRequest) {
     this.redemptionRequests.push(req);
     localStorage.setItem("requests_v16", JSON.stringify(this.redemptionRequests));
   }
-
   public updateRequest(req: RedemptionRequest) {
     const idx = this.redemptionRequests.findIndex((r) => r.id === req.id);
     if (idx >= 0) {
@@ -98,7 +90,7 @@ class DataService {
 export const dataService = new DataService();
 
 // ===============================
-// Rank logic (keep same behavior)
+// Rank logic
 // ===============================
 export function getRank(points: number, activityCount: number = 0): RankConfig {
   if (points > 200 || activityCount > 10) {
@@ -134,7 +126,7 @@ export function getRank(points: number, activityCount: number = 0): RankConfig {
 }
 
 // ===============================
-// Supabase: Volunteers (Search on Home)
+// Volunteers (Search)
 // ===============================
 export async function fetchVolunteerByCode(volunteerCode: string) {
   const code = (volunteerCode ?? "").trim();
@@ -148,10 +140,8 @@ export async function fetchVolunteerByCode(volunteerCode: string) {
 
   if (error) {
     console.error("[Supabase] fetchVolunteerByCode error:", error);
-    // ✅ ให้ caller เห็นว่า error (หน้าอื่นถ้าต้องการ) — แต่ตอนนี้ยังคง return null เพื่อไม่พัง flow เดิม
     return null;
   }
-
   return data;
 }
 
@@ -165,30 +155,51 @@ export function mapVolunteerRowToVolunteer(row: any): Volunteer {
 }
 
 // ===============================
-// Supabase: Activity History
+// Activity History
 // ===============================
+
+/**
+ * NOTE:
+ * ใน DB ของคุณมีโอกาสมี "date_text" (DD/MM/YYYY) แทน "activity_date"
+ * ดังนั้นเรา select มาทั้งสองชื่อ แล้วใช้ที่มีจริง
+ */
 export async function fetchActivityHistoryByCode(volunteerCode: string, thaiYear?: number) {
   const code = (volunteerCode ?? "").trim();
   if (!code) return [];
 
-  let q = supabase
+  // ดึงให้ครบทั้ง activity_date/date_text เพื่อกัน schema ไม่ตรง
+  const { data, error } = await supabase
     .from("activity_history")
-    .select("id, volunteer_code, name, branch, status, activity_date, thai_year")
+    .select(
+      "id, volunteer_code, name, branch, status, thai_year, activity_date, date_text"
+    )
     .eq("volunteer_code", code)
-    .order("activity_date", { ascending: false });
-
-  if (thaiYear && thaiYear > 0) {
-    q = q.eq("thai_year", thaiYear);
-  }
-
-  const { data, error } = await q;
+    // ถ้า activity_date ไม่มีจริง order จะ fail -> เลยไม่ order ใน query
+    .limit(5000);
 
   if (error) {
     console.error("[Supabase] fetchActivityHistoryByCode error:", error);
     return [];
   }
 
-  return data ?? [];
+  let rows = (data ?? []) as any[];
+
+  // filter year ใน JS (กัน thai_year null / ชื่อคอลัมน์ไม่ตรง)
+  if (thaiYear && thaiYear > 0) {
+    rows = rows.filter((r) => {
+      const y = deriveRowThaiYear(r);
+      return y === thaiYear;
+    });
+  }
+
+  // sort ล่าสุดก่อน (ใช้ activity_date ถ้ามี ไม่งั้นใช้ date_text)
+  rows.sort((a, b) => {
+    const da = toSortableDate(a);
+    const db = toSortableDate(b);
+    return db - da;
+  });
+
+  return rows;
 }
 
 export async function getVolunteerSummaryFromHistory(volunteerCode: string, thaiYear: number) {
@@ -200,26 +211,15 @@ export async function getVolunteerSummaryFromHistory(volunteerCode: string, thai
     points = activityCount * 20;
   }
 
-  const isAdmin = rowsThisYear.some(
-    (r: any) => String(r.status ?? "").trim().toUpperCase() === "ADMIN"
-  );
+  const isAdmin = rowsThisYear.some((r: any) => normalizeStatus(r.status) === "ADMIN");
 
   return { points, activityCount, isAdmin, rowsThisYear };
 }
 
 // ===============================
-// Leaderboard (Compute from activity_history directly) ✅ ไม่พึ่ง view
+// Leaderboard Summary (Compute from activity_history)
 // ===============================
 export type LeaderboardMode = "VOLUNTEERS" | "ADMIN";
-
-type ActivityRow = {
-  volunteer_code: string | null;
-  name: string | null;
-  branch: string | null;
-  status: string | null;
-  activity_date: string | null;
-  thai_year: number | string | null;
-};
 
 export type LeaderboardSummaryRow = {
   volunteer_code: string;
@@ -231,17 +231,13 @@ export type LeaderboardSummaryRow = {
   is_staff?: boolean;
 };
 
-// --- Normalizers ---
+// --- helpers / normalizers ---
 const normalizeCode = (v: any) => String(v ?? "").trim().toUpperCase();
 const normalizeStatus = (v: any) => String(v ?? "").trim().toUpperCase();
 
-const toThaiYearFromDate = (dateLike: string) => {
-  const d = new Date(dateLike);
-  if (Number.isNaN(d.getTime())) return undefined;
-  // ใช้ UTC ลดความเสี่ยงวันข้ามปีเพี้ยน
-  return d.getUTCFullYear() + 543;
-};
+const isNoScoreYear = (year: number) => year >= 2557 && year <= 2568;
 
+// parse thai_year ที่เป็น number/string
 const parseThaiYear = (v: any) => {
   if (v === null || v === undefined || v === "") return undefined;
   const n = typeof v === "number" ? v : Number(String(v).trim());
@@ -250,32 +246,70 @@ const parseThaiYear = (v: any) => {
   return n;
 };
 
-const isNoScoreYear = (year: number) => year >= 2557 && year <= 2568;
+// parse date_text = DD/MM/YYYY => Thai year
+const thaiYearFromDateText = (dateText: any) => {
+  const s = String(dateText ?? "").trim();
+  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return undefined;
+  const yyyy = Number(m[3]);
+  if (!Number.isFinite(yyyy)) return undefined;
+  return yyyy + 543;
+};
 
-// ✅ main function (สำคัญ: THROW เมื่อ error)
+// parse activity_date (ISO/Date) => Thai year
+const thaiYearFromActivityDate = (activityDate: any) => {
+  if (!activityDate) return undefined;
+  const d = new Date(activityDate);
+  if (Number.isNaN(d.getTime())) return undefined;
+  return d.getUTCFullYear() + 543;
+};
+
+// derive row Thai year (priority: thai_year -> activity_date -> date_text)
+const deriveRowThaiYear = (r: any) => {
+  return (
+    parseThaiYear(r.thai_year) ??
+    thaiYearFromActivityDate(r.activity_date) ??
+    thaiYearFromDateText(r.date_text)
+  );
+};
+
+// สำหรับ sort
+const toSortableDate = (r: any) => {
+  if (r.activity_date) {
+    const d = new Date(r.activity_date);
+    if (!Number.isNaN(d.getTime())) return d.getTime();
+  }
+  // date_text DD/MM/YYYY
+  const s = String(r.date_text ?? "").trim();
+  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return 0;
+  const dd = Number(m[1]);
+  const mm = Number(m[2]);
+  const yyyy = Number(m[3]);
+  const d = new Date(Date.UTC(yyyy, mm - 1, dd));
+  if (Number.isNaN(d.getTime())) return 0;
+  return d.getTime();
+};
+
+// ✅ main function
 export async function fetchLeaderboardSummary(
   mode: LeaderboardMode,
   thaiYear: number
 ): Promise<LeaderboardSummaryRow[]> {
-  // thaiYear: 0 = all years
-  // เราดึงมาแล้วคัดกรองใน JS เพื่อกันเคส status null/เพี้ยน
-
+  // ดึงทั้ง activity_date/date_text เพื่อกัน schema ไม่ตรง
   const { data, error } = await supabase
     .from("activity_history")
-    .select("volunteer_code, name, branch, status, activity_date, thai_year")
-    .limit(10000);
+    .select("volunteer_code, name, branch, status, thai_year, activity_date, date_text")
+    .limit(20000);
 
   if (error) {
     console.error("[Supabase] fetchLeaderboardSummary error:", error);
-    // ✅ จุดที่คุณถาม “ต้องแก้ตรงไหน”: ตรงนี้เลย
-    // ถ้า RLS/permission จะเห็น errorMsg ที่หน้า Leaderboard ทันที
+    // สำคัญ: ให้หน้า Leaderboard เห็น error จริง
     throw new Error(error.message);
   }
 
-  const rows: ActivityRow[] = (data ?? []) as any[];
-
-  // debug เบา ๆ (เอาออกทีหลังก็ได้)
-  console.log("[fetchLeaderboardSummary] raw rows:", rows.length, "mode:", mode, "year:", thaiYear);
+  const rows = (data ?? []) as any[];
+  console.log("[fetchLeaderboardSummary] raw rows:", rows.length, { mode, thaiYear });
 
   const map = new Map<string, LeaderboardSummaryRow>();
 
@@ -290,10 +324,7 @@ export async function fetchLeaderboardSummary(
     if (mode === "ADMIN" && !rowIsAdmin) continue;
     if (mode === "VOLUNTEERS" && rowIsAdmin) continue;
 
-    // derive thai year per row
-    const yFromCol = parseThaiYear(r.thai_year);
-    const yFromDate = r.activity_date ? toThaiYearFromDate(r.activity_date) : undefined;
-    const rowYear = yFromCol ?? yFromDate;
+    const rowYear = deriveRowThaiYear(r);
 
     // filter year
     if (thaiYear && thaiYear !== 0) {
@@ -314,8 +345,7 @@ export async function fetchLeaderboardSummary(
 
     prev.activity_count += 1;
 
-    // points rule
-    // ปี 2557–2568 -> ไม่นับคะแนน
+    // คะแนน: ปี 2557–2568 = 0
     const y = rowYear ?? (thaiYear !== 0 ? thaiYear : undefined);
     if (typeof y === "number" && !isNoScoreYear(y)) {
       prev.points += 20;
@@ -327,16 +357,15 @@ export async function fetchLeaderboardSummary(
     map.set(code, prev);
   }
 
-  const result = Array.from(map.values()).sort((a, b) => {
+  // sort: คะแนนก่อน แล้วค่อยจำนวนครั้ง
+  return Array.from(map.values()).sort((a, b) => {
     if (b.points !== a.points) return b.points - a.points;
     return b.activity_count - a.activity_count;
   });
-
-  return result;
 }
 
 // ===============================
-// Backward-compat (กันหน้าเก่าพัง)
+// Backward-compat
 // ===============================
 export async function getVolunteers() {
   return await fetchLeaderboardSummary("VOLUNTEERS", 0);
