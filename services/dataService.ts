@@ -168,11 +168,18 @@ export type LeaderboardMode = 'VOLUNTEERS' | 'ADMIN';
 const leaderboardTable = (mode: LeaderboardMode) =>
   mode === 'ADMIN' ? 'leaderboard_admin' : 'leaderboard_volunteers';
 
-export async function fetchLeaderboard(mode: LeaderboardMode) {
-  const { data, error } = await supabase
+export async function fetchLeaderboard(mode: LeaderboardMode, thaiYear?: number) {
+  let q = supabase
     .from(leaderboardTable(mode))
     .select('*')
     .limit(500);
+
+  // ✅ ถ้าเลือกปี (ไม่ใช่ 0) ให้กรองตามปี
+  if (thaiYear && thaiYear > 0) {
+    q = q.eq('thai_year', thaiYear);
+  }
+
+  const { data, error } = await q;
 
   if (error) {
     console.error('[Supabase] fetchLeaderboard error:', error);
