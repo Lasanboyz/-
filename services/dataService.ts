@@ -496,6 +496,18 @@ export async function addActivityOnce(params: {
   return true;
 }
 
+async function callAdminApi<T>(path: string, body: any): Promise<T> {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.error || `API error ${res.status}`);
+  return json?.data as T;
+}
+
 // ===============================
 // Create volunteer (existing signature kept, but NO is_staff anymore)
 // ===============================
@@ -503,7 +515,7 @@ export async function createVolunteer(params: {
   volunteerCode: string;
   name: string;
   branch: string;
-  isStaff?: boolean; // ✅ keep for backward-compat, but ignore
+  isStaff?: boolean; // keep for backward-compat, but ignore
 }) {
   const volunteerCode = String(params.volunteerCode ?? "").trim().toUpperCase();
   const name = String(params.name ?? "").trim();
@@ -513,24 +525,14 @@ export async function createVolunteer(params: {
   if (!name) throw new Error("กรุณากรอกชื่อ-นามสกุล");
   if (!branch) throw new Error("กรุณากรอกสังกัด/พื้นที่");
 
-  const { data: exist } = await supabase.from("volunteers").select("id").eq("volunteer_code", volunteerCode).maybeSingle();
-  if (exist?.id) throw new Error("รหัสนี้มีอยู่แล้ว (ซ้ำ)");
-
-  const { data, error } = await supabase
-    .from("volunteers")
-    .insert({
-      volunteer_code: volunteerCode,
-      name,
-      branch,
-      points: 0,
-      // ❌ removed is_staff completely
-    })
-    .select("id, volunteer_code, name, branch, points")
-    .maybeSingle();
-
-  if (error) throw new Error(error.message);
-  return data;
+  // 🔥 จุดสำคัญ: ไม่แตะ supabase ตรง ๆ แล้ว
+  return await callAdminApi<any>("/api/admin/createVolunteer", {
+    volunteer_code: volunteerCode,
+    name,
+    branch,
+  });
 }
+
 
 // =====================================================
 // ✅ NEW: Admin functions you requested (for Admin page later)
