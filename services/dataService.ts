@@ -508,14 +508,11 @@ async function callAdminApi<T>(path: string, body: any): Promise<T> {
   return json?.data as T;
 }
 
-// ===============================
-// Create volunteer (existing signature kept, but NO is_staff anymore)
-// ===============================
 export async function createVolunteer(params: {
   volunteerCode: string;
   name: string;
   branch: string;
-  isStaff?: boolean; // keep for backward-compat, but ignore
+  isStaff?: boolean;
 }) {
   const volunteerCode = String(params.volunteerCode ?? "").trim().toUpperCase();
   const name = String(params.name ?? "").trim();
@@ -525,12 +522,16 @@ export async function createVolunteer(params: {
   if (!name) throw new Error("กรุณากรอกชื่อ-นามสกุล");
   if (!branch) throw new Error("กรุณากรอกสังกัด/พื้นที่");
 
-  // 🔥 จุดสำคัญ: ไม่แตะ supabase ตรง ๆ แล้ว
-  return await callAdminApi<any>("/api/admin/createVolunteer", {
-    volunteer_code: volunteerCode,
-    name,
-    branch,
+  const res = await fetch("/api/admin/createVolunteer", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ volunteer_code: volunteerCode, name, branch }),
   });
+
+  const json = await res.json().catch(() => ({} as any));
+  if (!res.ok) throw new Error(json?.error || `API error ${res.status}`);
+
+  return json?.data ?? null;
 }
 
 
