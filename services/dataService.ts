@@ -180,10 +180,11 @@ export type LeaderboardSummaryRow = {
   activity_count: number;
   points: number;
   thai_year?: number;
-  // ❌ removed is_staff to avoid future misuse
 };
 
 type ActivityRow = {
+  id: string;                 // ✅ เพิ่ม
+  created_at: string | null;  // ✅ เพิ่ม
   volunteer_code: string | null;
   name: string | null;
   branch: string | null;
@@ -193,7 +194,9 @@ type ActivityRow = {
 };
 
 // ---- helpers ----
+const normalizeStatus = (v: any) => String(v ?? "").trim().toUpperCase();
 const normalizeCode = (v: any) => String(v ?? "").trim().toUpperCase();
+const isNoScoreYear = (year: number) => year >= 2557 && year <= 2568;
 
 const parseThaiYear = (v: any): number | undefined => {
   if (v === null || v === undefined || v === "") return undefined;
@@ -212,18 +215,24 @@ const deriveThaiYear = (r: ActivityRow): number | undefined => {
   return parseThaiYear(r.thai_year) ?? thaiYearFromActivityDate(r.activity_date);
 };
 
-export async function fetchLeaderboardSummary(mode: LeaderboardMode, thaiYear: number): Promise<LeaderboardSummaryRow[]> {
+export async function fetchLeaderboardSummary(
+  mode: LeaderboardMode,
+  thaiYear: number
+): Promise<LeaderboardSummaryRow[]> {
   const PAGE_SIZE = 1000;
   let from = 0;
 
   const allRows: ActivityRow[] = [];
+  const seen = new Set<string>(); // ✅ กันนับซ้ำข้ามหน้าเพจ
 
   while (true) {
     let q = supabase
       .from("activity_history")
-      .select("volunteer_code, name, branch, status, activity_date, thai_year")
-      .eq("is_void", false) // ✅ do not count void
+      .select("id, created_at, volunteer_code, name, branch, status, activity_date, thai_year")
+      .eq("is_void", false)
+      // ✅ สำคัญมาก: order ให้เสถียร เพื่อไม่ให้ pagination ซ้อน/หลุด
       .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
       .range(from, from + PAGE_SIZE - 1);
 
     if (thaiYear && thaiYear !== 0) q = q.eq("thai_year", thaiYear);
@@ -234,10 +243,17 @@ export async function fetchLeaderboardSummary(mode: LeaderboardMode, thaiYear: n
       throw new Error(error.message);
     }
 
-    const batch = (data ?? []) as any[];
+    const batch = (data ?? []) as ActivityRow[];
     if (batch.length === 0) break;
 
-    allRows.push(...(batch as ActivityRow[]));
+    // ✅ กันซ้ำ: ถ้าหน้าเพจซ้อน จะไม่ถูกนับซ้ำอีก
+    for (const r of batch) {
+      if (!r?.id) continue;
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      allRows.push(r);
+    }
+
     if (batch.length < PAGE_SIZE) break;
 
     from += PAGE_SIZE;
@@ -288,6 +304,7 @@ export async function fetchLeaderboardSummary(mode: LeaderboardMode, thaiYear: n
 
   return Array.from(map.values());
 }
+
 
 // ===============================
 // Backward-compat
