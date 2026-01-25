@@ -246,35 +246,49 @@ export async function fetchLeaderboardSummary(
   mode: LeaderboardMode,
   thaiYear: number // 0 = all years
 ): Promise<LeaderboardSummaryRow[]> {
-  // ✅ สำคัญ: ปีที่เลือก filter ที่ DB ตรง ๆ (ตามที่คุณเช็กใน SQL แล้วว่ามี)
-  let q = supabase
-    .from("activity_history")
-    .select("volunteer_code, name, branch, status, activity_date, thai_year");
+  const PAGE_SIZE = 1000; // Supabase max rows มัก 1000
+  let from = 0;
 
-  if (thaiYear && thaiYear !== 0) {
-    q = q.eq("thai_year", thaiYear);
+  const allRows: ActivityRow[] = [];
+
+  while (true) {
+    let q = supabase
+      .from("activity_history")
+      .select("volunteer_code, name, branch, status, activity_date, thai_year")
+      .order("created_at", { ascending: true }) // ให้ pagination เสถียร
+      .range(from, from + PAGE_SIZE - 1);
+
+    // ✅ ถ้าเลือกปี -> filter ที่ DB ก่อน (เร็วและชัวร์)
+    if (thaiYear && thaiYear !== 0) {
+      q = q.eq("thai_year", thaiYear);
+    }
+
+    const { data, error } = await q;
+
+    if (error) {
+      console.error("[Supabase] fetchLeaderboardSummary error:", error);
+      throw new Error(error.message);
+    }
+
+    const batch = (data ?? []) as any[];
+    if (batch.length === 0) break;
+
+    allRows.push(...(batch as ActivityRow[]));
+
+    // ถ้าได้มาน้อยกว่า PAGE_SIZE แปลว่าหมดแล้ว
+    if (batch.length < PAGE_SIZE) break;
+
+    from += PAGE_SIZE;
+
+    // กัน loop ยาวเกิน (ปรับได้)
+    if (from > 200000) break;
   }
 
-  const { data, error } = await q.limit(50000);
-
-  if (error) {
-    console.error("[Supabase] fetchLeaderboardSummary error:", error);
-    throw new Error(error.message);
-  }
-
-  const rows: ActivityRow[] = (data ?? []) as any[];
-
-  if (__debug) {
-    console.log("[LB] fetched:", { mode, thaiYear, rows: rows.length });
-    console.log(
-      "[LB] 80010301 count:",
-      rows.filter((r) => String(r.volunteer_code ?? "").trim() === "80010301").length
-    );
-  }
+  console.log("[LB] fetched:", { mode, thaiYear, rows: allRows.length });
 
   const map = new Map<string, LeaderboardSummaryRow>();
 
-  for (const r of rows) {
+  for (const r of allRows) {
     const code = normalizeCode(r.volunteer_code);
     if (!code) continue;
 
@@ -286,7 +300,11 @@ export async function fetchLeaderboardSummary(
     if (mode === "VOLUNTEERS" && rowIsAdmin) continue;
 
     const rowYear = deriveThaiYear(r);
-    const effectiveYear = thaiYear !== 0 ? thaiYear : rowYear;
+
+    // year filter (สำรองอีกชั้น เผื่อ thai_year บางแถวเป็น null)
+    if (thaiYear && thaiYear !== 0) {
+      if (rowYear !== thaiYear) continue;
+    }
 
     const prev =
       map.get(code) ??
@@ -296,13 +314,14 @@ export async function fetchLeaderboardSummary(
         branch: r.branch ?? "",
         activity_count: 0,
         points: 0,
-        thai_year: thaiYear !== 0 ? thaiYear : effectiveYear,
+        thai_year: thaiYear !== 0 ? thaiYear : undefined,
         is_staff: mode === "ADMIN",
       } as LeaderboardSummaryRow);
 
     prev.activity_count += 1;
 
-    // คะแนน: ปี 2557–2568 ไม่นับคะแนน แต่ยังนับครั้ง
+    // points rule: ปี 2557–2568 ไม่นับคะแนน
+    const effectiveYear = thaiYear !== 0 ? thaiYear : rowYear;
     if (typeof effectiveYear === "number" && !isNoScoreYear(effectiveYear)) {
       prev.points += 20;
     }
@@ -313,8 +332,19 @@ export async function fetchLeaderboardSummary(
     map.set(code, prev);
   }
 
-  return Array.from(map.values());
+  const result = Array.from(map.values());
+
+  // ✅ เช็ค 80010301 แบบชัด ๆ
+  console.log(
+    "[LB] has 80010301?",
+    result.some((x) => x.volunteer_code === "80010301"),
+    "row=",
+    result.find((x) => x.volunteer_code === "80010301")
+  );
+
+  return result;
 }
+
 
 // ===============================
 // Backward-compat
