@@ -241,15 +241,77 @@ export async function fetchLeaderboardSummary(
   mode: LeaderboardMode,
   thaiYear: number // 0 = all years
 ): Promise<LeaderboardSummaryRow[]> {
-  const { data, error } = await supabase
+
+  // 1) สร้าง query
+  let q = supabase
     .from("activity_history")
-    .select("volunteer_code, name, branch, status, activity_date, thai_year")
-    .limit(50000);
+    .select("volunteer_code, name, branch, status, activity_date, thai_year");
+
+  // ✅ 2) ถ้าเลือกปี -> filter ที่ DB ตรง ๆ (นี่แหละที่ทำให้ปีขึ้นชัวร์)
+  if (thaiYear && thaiYear !== 0) {
+    q = q.eq("thai_year", thaiYear);
+  }
+
+  // 3) ดึงข้อมูล
+  const { data, error } = await q.limit(50000);
 
   if (error) {
     console.error("[Supabase] fetchLeaderboardSummary error:", error);
     throw new Error(error.message);
   }
+
+  const rows: ActivityRow[] = (data ?? []) as any[];
+
+  // ✅ log ให้เห็นเลยว่า DB ส่งแถวของปีนั้นมาจริงไหม
+  console.log("[LB] fetched rows:", { mode, thaiYear, rows: rows.length });
+  // probe 80010301
+  console.log(
+    "[LB] probe 80010301 count:",
+    rows.filter((r) => String(r.volunteer_code ?? "").trim() === "80010301").length
+  );
+
+  const map = new Map<string, LeaderboardSummaryRow>();
+
+  for (const r of rows) {
+    const code = normalizeCode(r.volunteer_code);
+    if (!code) continue;
+
+    const status = normalizeStatus(r.status);
+    const rowIsAdmin = status === "ADMIN";
+
+    // mode filter (แยกอาสา/แอดมิน)
+    if (mode === "ADMIN" && !rowIsAdmin) continue;
+    if (mode === "VOLUNTEERS" && rowIsAdmin) continue;
+
+    const prev =
+      map.get(code) ??
+      ({
+        volunteer_code: code,
+        name: r.name ?? "",
+        branch: r.branch ?? "",
+        activity_count: 0,
+        points: 0,
+        thai_year: thaiYear !== 0 ? thaiYear : undefined,
+        is_staff: mode === "ADMIN",
+      } as LeaderboardSummaryRow);
+
+    prev.activity_count += 1;
+
+    // points rule: ปี 2557–2568 ไม่นับคะแนน
+    const effectiveYear = thaiYear !== 0 ? thaiYear : parseThaiYear(r.thai_year);
+    if (typeof effectiveYear === "number" && !isNoScoreYear(effectiveYear)) {
+      prev.points += 20;
+    }
+
+    if (!prev.name && r.name) prev.name = r.name;
+    if (!prev.branch && r.branch) prev.branch = r.branch;
+
+    map.set(code, prev);
+  }
+
+  return Array.from(map.values());
+}
+
 
   const rows: ActivityRow[] = (data ?? []) as any[];
   const map = new Map<string, LeaderboardSummaryRow>();
