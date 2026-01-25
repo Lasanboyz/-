@@ -708,3 +708,35 @@ export async function adminUpdateVolunteerRole(params: { volunteer_code: string;
     { volunteer_code, role }
   );
 }
+
+// ===============================
+// ✅ Admin: Deduct points via Server API (Service Role)
+// ใช้แทน adminDeductPoints เดิมในหน้า Admin
+// ===============================
+export async function adminDeductPointsViaApi(params: {
+  volunteer_code: string;
+  amount: number;
+  note?: string;
+}) {
+  const volunteer_code = String(params.volunteer_code ?? "")
+    .trim()
+    .toUpperCase();
+  const amount = Number(params.amount ?? 0);
+  const note = String(params.note ?? "admin deduct").trim();
+
+  if (!volunteer_code) throw new Error("volunteer_code is required");
+  if (!Number.isFinite(amount) || amount <= 0)
+    throw new Error("amount must be > 0");
+
+  return await callAdminApi<{
+    ok: boolean;
+    volunteer_code: string;
+    before: number;
+    after: number;
+    deducted: number;
+  }>("/api/admin/deductPoints", {
+    volunteer_code,
+    amount,
+    note,
+  });
+}
