@@ -51,38 +51,35 @@ export const Profile: React.FC = () => {
   // ปีที่ “ไม่คิดคะแนน”
   const isNoScoreYear = selectedYear >= 2557 && selectedYear <= 2568;
 
- // rank helper (points OR activityCount)
-const computeRank = (
-  points: number,
-  activityCount: number = 0
-): RankConfig => {
-  if (points > 200 || activityCount > 10) {
+  // rank helper (points OR activityCount)
+  const computeRank = (points: number, activityCount: number = 0): RankConfig => {
+    if (points > 200 || activityCount > 10) {
+      return {
+        name: "ผู้มีพลังขับเคลื่อนสังคม",
+        icon: "🔥",
+        color: "bg-orange-100 text-orange-600",
+      };
+    }
+    if (points > 100 || activityCount >= 5) {
+      return {
+        name: "นักสร้างสรรค์แบ่งปันโอกาส",
+        icon: "🌳",
+        color: "bg-teal-100 text-teal-600",
+      };
+    }
+    if (points > 50 || activityCount >= 3) {
+      return {
+        name: "เพื่อนชุมชน",
+        icon: "🌿",
+        color: "bg-green-100 text-green-600",
+      };
+    }
     return {
-      name: "ผู้มีพลังขับเคลื่อนสังคม",
-      icon: "🔥",
-      color: "bg-orange-100 text-orange-600",
+      name: "ผู้เริ่มต้นแบ่งปัน",
+      icon: "🌱",
+      color: "bg-lime-100 text-lime-600",
     };
-  }
-  if (points > 100 || activityCount >= 5) {
-    return {
-      name: "นักสร้างสรรค์แบ่งปันโอกาส",
-      icon: "🌳",
-      color: "bg-teal-100 text-teal-600",
-    };
-  }
-  if (points > 50 || activityCount >= 3) {
-    return {
-      name: "เพื่อนชุมชน",
-      icon: "🌿",
-      color: "bg-green-100 text-green-600",
-    };
-  }
-  return {
-    name: "ผู้เริ่มต้นแบ่งปัน",
-    icon: "🌱",
-    color: "bg-lime-100 text-lime-600",
   };
-};
 
   const toThaiYearFromDate = (dateLike: string) => {
     const d = new Date(dateLike);
@@ -97,6 +94,11 @@ const computeRank = (
         if (t.thaiYear >= 2557 && t.thaiYear <= 2568) return sum + 0;
         return sum + Number(t.amount ?? 0);
       }, 0);
+  };
+
+  // ✅ FIX: ต้องมีฟังก์ชันนี้ ไม่งั้น build พัง (countActivities is not defined)
+  const countActivities = (txs: Transaction[], year: number) => {
+    return txs.filter((t) => t.type === ("ACTIVITY" as any) && t.thaiYear === year).length;
   };
 
   // =========================
@@ -139,7 +141,7 @@ const computeRank = (
           setTransactions([]);
           setAnnualPoints(0);
           setTotalPoints(0);
-          setRank(computeRank(0));
+          setRank(computeRank(0, 0));
           return;
         }
 
@@ -164,7 +166,8 @@ const computeRank = (
             volunteerId: mappedVolunteer.id,
             amount: POINTS_PER_ACTIVITY,
             type: "ACTIVITY" as any,
-            description: a?.status === "ADMIN" ? "ร่วมกิจกรรมอาสา (ทีมงาน/Admin)" : "ร่วมกิจกรรมอาสา",
+            description:
+              a?.status === "ADMIN" ? "ร่วมกิจกรรมอาสา (ทีมงาน/Admin)" : "ร่วมกิจกรรมอาสา",
             date: a.activity_date ?? new Date().toISOString(),
             thaiYear,
             createdBy: "system",
@@ -209,12 +212,16 @@ const computeRank = (
         setTransactions(allTx);
 
         // 5) คำนวณแต้มรวม + แต้มปีปัจจุบัน (ตาม rule ปีไม่คิดคะแนน)
+        const currentYear = getCurrentThaiYear();
         const total = sumPointsWithRule(allTx);
-        const annual = sumPointsWithRule(allTx, getCurrentThaiYear());
+        const annual = sumPointsWithRule(allTx, currentYear);
 
         setTotalPoints(total);
         setAnnualPoints(annual);
-        setRank(computeRank(annual));
+
+        // ✅ FIX: rank ต้องใช้ activityCount ของ "ปีปัจจุบัน"
+        const activityCountThisYear = countActivities(allTx, currentYear);
+        setRank(computeRank(annual, activityCountThisYear));
       } catch (err: any) {
         if (cancelled) return;
         console.error("Profile load error:", err);
@@ -242,23 +249,22 @@ const computeRank = (
   useEffect(() => {
     if (!transactions || transactions.length === 0) {
       setAnnualPoints(0);
-      setRank(computeRank(0));
+      setRank(computeRank(0, 0));
       return;
     }
 
-    const year = selectedYear === 0 ? undefined : selectedYear;
-    const pts = year ? sumPointsWithRule(transactions, year) : sumPointsWithRule(transactions, getCurrentThaiYear());
+    const currentYear = getCurrentThaiYear();
 
-    // ถ้าเลือก "ทั้งหมด" ให้ rank ยึดปีปัจจุบันเหมือนเดิม (ไม่งง)
-    if (selectedYear === 0) {
-      const currentPts = sumPointsWithRule(transactions, getCurrentThaiYear());
-      setAnnualPoints(currentPts);
-      setRank(computeRank(currentPts));
-    } else {
-      setAnnualPoints(pts);
-      setRank(computeRank(pts, transactions.filter(t => t.type === "ACTIVITY").length));
+    // คะแนนที่โชว์ในหัวข้อ "แต้มสะสมปีนี้" และ Rank
+    // - ถ้าเลือก "ทั้งหมด" ให้ยึดปีปัจจุบัน (ไม่งง)
+    // - ถ้าเลือกปีใดปีหนึ่ง ให้ยึดปีนั้น
+    const effectiveYear = selectedYear === 0 ? currentYear : selectedYear;
 
-    }
+    const pts = sumPointsWithRule(transactions, effectiveYear);
+    const activityCount = countActivities(transactions, effectiveYear);
+
+    setAnnualPoints(pts);
+    setRank(computeRank(pts, activityCount));
   }, [selectedYear, transactions]);
 
   // =========================
@@ -282,7 +288,9 @@ const computeRank = (
       return;
     }
 
-    alert("ตอนนี้ระบบโอนแต้มยังไม่ได้ผูกกับ Supabase — ถ้าต้องการให้โอนได้จริง เดี๋ยวผมทำฟังก์ชันให้ต่อ");
+    alert(
+      "ตอนนี้ระบบโอนแต้มยังไม่ได้ผูกกับ Supabase — ถ้าต้องการให้โอนได้จริง เดี๋ยวผมทำฟังก์ชันให้ต่อ"
+    );
   };
 
   // =========================
@@ -361,7 +369,11 @@ const computeRank = (
 
             <div className="text-right">
               <p className="text-sm text-gray-500 mb-1">แต้มสะสมปีนี้</p>
-              <span className={`text-3xl font-bold ${isNoScoreYear ? "text-gray-400" : "text-primary"}`}>
+              <span
+                className={`text-3xl font-bold ${
+                  isNoScoreYear ? "text-gray-400" : "text-primary"
+                }`}
+              >
                 {isNoScoreYear ? "ไม่ระบุ" : annualPoints}
               </span>
             </div>
@@ -442,7 +454,11 @@ const computeRank = (
                 </div>
               </div>
 
-              <div className={`font-bold text-lg ${tx.amount >= 0 ? "text-green-500" : "text-red-500"}`}>
+              <div
+                className={`font-bold text-lg ${
+                  tx.amount >= 0 ? "text-green-500" : "text-red-500"
+                }`}
+              >
                 {tx.amount >= 0 ? "+" : ""}
                 {tx.amount}
               </div>
@@ -490,7 +506,10 @@ const computeRank = (
                     value={transferReceiverId}
                     onChange={(e) => setTransferReceiverId(e.target.value)}
                   />
-                  <User className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                  <User
+                    className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+                    size={18}
+                  />
                 </div>
               </div>
 
