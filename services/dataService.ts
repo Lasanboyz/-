@@ -439,3 +439,104 @@ export async function fetchVolunteerPointsByCode(volunteerCode: string) {
   if (!v) return null;
   return { points: Number(v.points ?? 0), id: v.id, volunteer_code: v.volunteer_code };
 }
+
+// ===============================
+// Admin: Adjust Points (Give / Deduct) + Logs
+// ===============================
+
+export async function adminGivePoints(params: {
+  toVolunteerCode: string;
+  amount: number;
+  note?: string;
+}) {
+  const toCode = String(params.toVolunteerCode ?? "").trim().toUpperCase();
+  const amount = Number(params.amount ?? 0);
+  const note = String(params.note ?? "").trim();
+
+  if (!toCode) throw new Error("กรุณากรอกรหัสผู้รับ");
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error("จำนวนแต้มต้องมากกว่า 0");
+
+  const toV = await getVolunteerByCodeForPoints(toCode);
+  if (!toV) throw new Error(`ไม่พบผู้รับ: ${toCode}`);
+
+  // insert log (from=null => give)
+  const { error } = await supabase.from("point_transactions").insert({
+    from_volunteer_id: null,
+    to_volunteer_id: toV.id,
+    amount,
+    type: "adjustment",
+    note: note || `admin give +${amount} to ${toCode}`,
+  });
+
+  if (error) {
+    console.error("[Supabase] adminGivePoints error:", error);
+    throw new Error(error.message);
+  }
+
+  return true;
+}
+
+export async function adminDeductPoints(params: {
+  volunteerCode: string;
+  amount: number;
+  note?: string;
+}) {
+  const code = String(params.volunteerCode ?? "").trim().toUpperCase();
+  const amount = Number(params.amount ?? 0);
+  const note = String(params.note ?? "").trim();
+
+  if (!code) throw new Error("กรุณากรอกรหัสพนักงาน");
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error("จำนวนแต้มต้องมากกว่า 0");
+
+  const v = await getVolunteerByCodeForPoints(code);
+  if (!v) throw new Error(`ไม่พบพนักงาน: ${code}`);
+
+  const current = Number(v.points ?? 0);
+  if (current < amount) throw new Error(`แต้มไม่พอ (คงเหลือ ${current})`);
+
+  // 1) หักแต้มตรง ๆ
+  const { error: updErr } = await supabase
+    .from("volunteers")
+    .update({ points: current - amount })
+    .eq("id", v.id);
+
+  if (updErr) {
+    console.error("[Supabase] adminDeductPoints update error:", updErr);
+    throw new Error(updErr.message);
+  }
+
+  // 2) insert log ไว้ดูประวัติ (amount ต้องเป็นบวกตาม constraint)
+  const { error: logErr } = await supabase.from("point_transactions").insert({
+    from_volunteer_id: null,
+    to_volunteer_id: v.id,
+    amount,
+    type: "deduct",
+    note: note || `admin deduct -${amount} from ${code}`,
+  });
+
+  if (logErr) {
+    console.error("[Supabase] adminDeductPoints log error:", logErr);
+    // ไม่ throw เพื่อไม่ให้ “หักแต้มแล้วแต่โชว์ว่าล้มเหลว” (แต่คุณจะเห็น error ใน console)
+  }
+
+  return true;
+}
+
+export async function adminFetchPointHistory(volunteerId: string) {
+  const id = String(volunteerId ?? "").trim();
+  if (!id) return [];
+
+  const { data, error } = await supabase
+    .from("point_transactions_view")
+    .select("*")
+    .or(`from_volunteer_id.eq.${id},to_volunteer_id.eq.${id}`)
+    .order("created_at", { ascending: false })
+    .limit(200);
+
+  if (error) {
+    console.error("[Supabase] adminFetchPointHistory error:", error);
+    return [];
+  }
+
+  return data ?? [];
+}
