@@ -312,55 +312,7 @@ export async function fetchLeaderboardSummary(
   return Array.from(map.values());
 }
 
-
-  const rows: ActivityRow[] = (data ?? []) as any[];
-  const map = new Map<string, LeaderboardSummaryRow>();
-
-  for (const r of rows) {
-    const code = normalizeCode(r.volunteer_code);
-    if (!code) continue;
-
-    const status = normalizeStatus(r.status);
-    const rowIsAdmin = status === "ADMIN";
-
-    // mode filter
-    if (mode === "ADMIN" && !rowIsAdmin) continue;
-    if (mode === "VOLUNTEERS" && rowIsAdmin) continue;
-
-    const rowYear = deriveThaiYear(r);
-
-    // year filter (ตัวนี้คือจุดที่เคยพัง เพราะ type ไม่ตรง)
-    if (thaiYear && thaiYear !== 0) {
-      if (rowYear !== thaiYear) continue;
-    }
-
-    const prev =
-      map.get(code) ??
-      ({
-        volunteer_code: code,
-        name: r.name ?? "",
-        branch: r.branch ?? "",
-        activity_count: 0,
-        points: 0,
-        thai_year: thaiYear !== 0 ? thaiYear : undefined,
-        is_staff: mode === "ADMIN",
-      } as LeaderboardSummaryRow);
-
-    prev.activity_count += 1;
-
-    // points rule: ปี 2557–2568 ไม่นับคะแนน
-    const effectiveYear = thaiYear !== 0 ? thaiYear : rowYear;
-    if (typeof effectiveYear === "number" && !isNoScoreYear(effectiveYear)) {
-      prev.points += 20;
-    }
-
-    if (!prev.name && r.name) prev.name = r.name;
-    if (!prev.branch && r.branch) prev.branch = r.branch;
-
-    map.set(code, prev);
-  }
-
-  return Array.from(map.values());
+rom(map.values());
 }
 
 // ===============================
