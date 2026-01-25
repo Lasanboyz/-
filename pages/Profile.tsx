@@ -17,6 +17,8 @@ import {
   fetchVolunteerByCode,
   getCurrentThaiYear,
   mapVolunteerRowToVolunteer,
+  transferPoints,
+  fetchVolunteerPointsByCode,
 } from "../services/dataService";
 import type { Volunteer, Transaction, RankConfig } from "../types";
 
@@ -41,6 +43,10 @@ export const Profile: React.FC = () => {
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferReceiverId, setTransferReceiverId] = useState("");
   const [transferAmount, setTransferAmount] = useState("");
+  const [transferSubmitting, setTransferSubmitting] = useState(false);
+
+  // ใช้ trigger reload หลังโอนสำเร็จ
+  const [reloadTick, setReloadTick] = useState(0);
 
   // normalize volunteer code from url param
   const volunteerCode = useMemo(() => {
@@ -56,6 +62,7 @@ export const Profile: React.FC = () => {
     if (points > 200 || activityCount > 10) {
       return {
         name: "ผู้มีพลังขับเคลื่อนสังคม",
+        minPoints: 201,
         icon: "🔥",
         color: "bg-orange-100 text-orange-600",
       };
@@ -63,6 +70,7 @@ export const Profile: React.FC = () => {
     if (points > 100 || activityCount >= 5) {
       return {
         name: "นักสร้างสรรค์แบ่งปันโอกาส",
+        minPoints: 101,
         icon: "🌳",
         color: "bg-teal-100 text-teal-600",
       };
@@ -70,12 +78,14 @@ export const Profile: React.FC = () => {
     if (points > 50 || activityCount >= 3) {
       return {
         name: "เพื่อนชุมชน",
+        minPoints: 51,
         icon: "🌿",
         color: "bg-green-100 text-green-600",
       };
     }
     return {
       name: "ผู้เริ่มต้นแบ่งปัน",
+      minPoints: 0,
       icon: "🌱",
       color: "bg-lime-100 text-lime-600",
     };
@@ -96,9 +106,8 @@ export const Profile: React.FC = () => {
       }, 0);
   };
 
-  // ✅ FIX: ต้องมีฟังก์ชันนี้ ไม่งั้น build พัง (countActivities is not defined)
   const countActivities = (txs: Transaction[], year: number) => {
-    return txs.filter((t) => t.type === ("ACTIVITY" as any) && t.thaiYear === year).length;
+    return txs.filter((t) => t.type === "ACTIVITY" && t.thaiYear === year).length;
   };
 
   // =========================
@@ -118,9 +127,8 @@ export const Profile: React.FC = () => {
         setLoading(true);
         setErrorMsg(null);
 
-        // 1) โหลด volunteer จาก service เดิม
+        // 1) โหลด volunteer
         const vRow = await fetchVolunteerByCode(volunteerCode);
-
         if (cancelled) return;
 
         if (!vRow) {
@@ -136,7 +144,6 @@ export const Profile: React.FC = () => {
         const mappedVolunteer: Volunteer = mapVolunteerRowToVolunteer(vRow);
         setVolunteer(mappedVolunteer);
 
-        // ✅ กันพังกรณี supabaseClient undefined / env ไม่ครบ
         if (!supabaseClient) {
           setTransactions([]);
           setAnnualPoints(0);
@@ -152,9 +159,7 @@ export const Profile: React.FC = () => {
           .eq("volunteer_code", volunteerCode)
           .order("activity_date", { ascending: false });
 
-        if (actErr) {
-          console.error("Activity load error:", actErr);
-        }
+        if (actErr) console.error("Activity load error:", actErr);
 
         const activityTx: Transaction[] = (actData ?? []).map((a: any, idx: number) => {
           const thaiYear =
@@ -165,25 +170,25 @@ export const Profile: React.FC = () => {
             id: `act_${thaiYear}_${idx}`,
             volunteerId: mappedVolunteer.id,
             amount: POINTS_PER_ACTIVITY,
-            type: "ACTIVITY" as any,
+            type: "ACTIVITY",
             description:
-              a?.status === "ADMIN" ? "ร่วมกิจกรรมอาสา (ทีมงาน/Admin)" : "ร่วมกิจกรรมอาสา",
+              String(a?.status ?? "").toUpperCase() === "ADMIN"
+                ? "ร่วมกิจกรรมอาสา (ทีมงาน/Admin)"
+                : "ร่วมกิจกรรมอาสา",
             date: a.activity_date ?? new Date().toISOString(),
             thaiYear,
             createdBy: "system",
-          } as Transaction;
+          };
         });
 
-        // 3) โหลด “ประวัติการโอน” จาก view (เหมือนของเดิม)
+        // 3) โหลด “ประวัติการโอน” จาก view
         const { data: txData, error: txError } = await supabaseClient
           .from("point_transactions_view")
           .select("*")
           .or(`from_volunteer_id.eq.${vRow.id},to_volunteer_id.eq.${vRow.id}`)
           .order("created_at", { ascending: false });
 
-        if (txError) {
-          console.error("TX load error:", txError);
-        }
+        if (txError) console.error("TX load error:", txError);
 
         const transferTx: Transaction[] = (txData ?? []).map((t: any) => {
           const isOut = t.from_volunteer_id === vRow.id;
@@ -194,14 +199,15 @@ export const Profile: React.FC = () => {
             id: t.id,
             volunteerId: vRow.id,
             amount: isOut ? -Math.abs(amount) : Math.abs(amount),
-            type: "TRANSFER" as any,
+            type: "TRANSFER",
             description: isOut
               ? `โอนให้ ${t.to_name ?? t.to_volunteer_code ?? "-"}`
               : `ได้รับจาก ${t.from_name ?? t.from_volunteer_code ?? "-"}`,
             date: createdAt,
             thaiYear: toThaiYearFromDate(createdAt),
             createdBy: "system",
-          } as Transaction;
+            relatedId: isOut ? t.to_volunteer_id : t.from_volunteer_id,
+          };
         });
 
         // 4) รวมรายการทั้งหมด
@@ -216,10 +222,13 @@ export const Profile: React.FC = () => {
         const total = sumPointsWithRule(allTx);
         const annual = sumPointsWithRule(allTx, currentYear);
 
-        setTotalPoints(total);
+        // ✅ ปรับ totalPoints ให้ยึด DB เป็นหลัก (กันเคส tx ยังโหลดไม่ครบ / future)
+        const latest = await fetchVolunteerPointsByCode(volunteerCode);
+        const totalFromDb = latest?.points ?? total;
+
+        setTotalPoints(totalFromDb);
         setAnnualPoints(annual);
 
-        // ✅ FIX: rank ต้องใช้ activityCount ของ "ปีปัจจุบัน"
         const activityCountThisYear = countActivities(allTx, currentYear);
         setRank(computeRank(annual, activityCountThisYear));
       } catch (err: any) {
@@ -241,7 +250,7 @@ export const Profile: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [volunteerCode]);
+  }, [volunteerCode, reloadTick]);
 
   // =========================
   // Recompute Annual points + rank when selectedYear changes
@@ -254,10 +263,6 @@ export const Profile: React.FC = () => {
     }
 
     const currentYear = getCurrentThaiYear();
-
-    // คะแนนที่โชว์ในหัวข้อ "แต้มสะสมปีนี้" และ Rank
-    // - ถ้าเลือก "ทั้งหมด" ให้ยึดปีปัจจุบัน (ไม่งง)
-    // - ถ้าเลือกปีใดปีหนึ่ง ให้ยึดปีนั้น
     const effectiveYear = selectedYear === 0 ? currentYear : selectedYear;
 
     const pts = sumPointsWithRule(transactions, effectiveYear);
@@ -268,29 +273,71 @@ export const Profile: React.FC = () => {
   }, [selectedYear, transactions]);
 
   // =========================
-  // Transfer (ยังไม่ผูก Supabase)
+  // Transfer (ผูก Supabase แล้ว ✅)
   // =========================
-  const handleTransferSubmit = (e: React.FormEvent) => {
+  const handleTransferSubmit = async (e:/compiler React.FormEvent) => {
     e.preventDefault();
     if (!volunteer) return;
 
-    const amount = parseInt(transferAmount, 10);
-    if (Number.isNaN(amount) || amount <= 0) {
+    const toCode = String(transferReceiverId ?? "").trim().toUpperCase();
+    const amount = Number(transferAmount ?? 0);
+
+    if (!toCode) {
+      alert("กรุณาระบุรหัสพนักงานผู้รับ");
+      return;
+    }
+    if (toCode === String(volunteer.empId).trim().toUpperCase()) {
+      alert("ห้ามโอนให้ตัวเอง");
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
       alert("กรุณาระบุจำนวนแต้มที่ถูกต้อง");
+      return;
+    }
+    if (amount > Math.max(totalPoints, 0)) {
+      alert(`แต้มไม่พอ (โอนได้สูงสุด ${totalPoints})`);
+      return;
+    }
+
+    // ✅ เช็กว่าผู้รับมีอยู่จริง
+    const receiverRow = await fetchVolunteerByCode(toCode);
+    if (!receiverRow) {
+      alert("ไม่พบรหัสผู้รับในระบบ");
       return;
     }
 
     if (
       !confirm(
-        `ยืนยันการโอน ${amount} แต้ม ให้รหัส ${transferReceiverId}?\n\n⚠️ เมื่อโอนแล้วจะไม่สามารถเรียกคืนได้!`
+        `ยืนยันการโอน ${amount} แต้ม ให้รหัส ${toCode}?\n\n⚠️ เมื่อโอนแล้วจะไม่สามารถเรียกคืนได้!`
       )
-    ) {
-      return;
-    }
+    ) return;
 
-    alert(
-      "ตอนนี้ระบบโอนแต้มยังไม่ได้ผูกกับ Supabase — ถ้าต้องการให้โอนได้จริง เดี๋ยวผมทำฟังก์ชันให้ต่อ"
-    );
+    try {
+      setTransferSubmitting(true);
+
+      // ✅ insert เข้า point_transactions (trigger จะอัปเดต volunteers.points)
+      await transferPoints({
+        fromVolunteerCode: volunteer.empId,
+        toVolunteerCode: toCode,
+        amount,
+        note: `transfer by ${volunteer.empId}`,
+      });
+
+      // ปิด modal + เคลียร์ฟอร์ม
+      setShowTransferModal(false);
+      setTransferReceiverId("");
+      setTransferAmount("");
+
+      // ✅ reload ทั้งหน้า profile (โหลด tx + points ใหม่)
+      setReloadTick((x) => x + 1);
+
+      alert("โอนแต้มสำเร็จ ✅");
+    } catch (err: any) {
+      console.error("transfer error:", err);
+      alert(err?.message ?? "โอนไม่สำเร็จ");
+    } finally {
+      setTransferSubmitting(false);
+    }
   };
 
   // =========================
@@ -474,6 +521,7 @@ export const Profile: React.FC = () => {
             <button
               onClick={() => setShowTransferModal(false)}
               className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+              disabled={transferSubmitting}
             >
               <X size={24} />
             </button>
@@ -487,7 +535,7 @@ export const Profile: React.FC = () => {
               <div>
                 <p className="font-semibold">ข้อควรระวัง</p>
                 <p className="text-xs opacity-80">
-                  ตอนนี้ยังไม่ได้ผูก “โอนแต้ม” กับ Supabase — ถ้าต้องการให้โอนได้จริง เดี๋ยวผมทำให้ต่อ
+                  โอนแล้วเรียกคืนไม่ได้ กรุณาตรวจสอบ “รหัสผู้รับ” และ “จำนวนแต้ม” ให้ถูกต้องก่อนกดโอน
                 </p>
               </div>
             </div>
@@ -505,6 +553,7 @@ export const Profile: React.FC = () => {
                     className="w-full pl-10 p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
                     value={transferReceiverId}
                     onChange={(e) => setTransferReceiverId(e.target.value)}
+                    disabled={transferSubmitting}
                   />
                   <User
                     className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
@@ -524,14 +573,20 @@ export const Profile: React.FC = () => {
                   className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none font-bold text-lg"
                   value={transferAmount}
                   onChange={(e) => setTransferAmount(e.target.value)}
+                  disabled={transferSubmitting}
                 />
               </div>
 
               <button
                 type="submit"
-                className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-200 transition"
+                disabled={transferSubmitting}
+                className={`w-full font-bold py-3 rounded-xl shadow-lg transition ${
+                  transferSubmitting
+                    ? "bg-gray-300 text-gray-600"
+                    : "bg-blue-600 text-white hover:bg-blue-700 shadow-blue-200"
+                }`}
               >
-                ยืนยันการโอน
+                {transferSubmitting ? "กำลังโอน..." : "ยืนยันการโอน"}
               </button>
             </form>
           </div>
