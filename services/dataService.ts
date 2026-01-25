@@ -355,3 +355,87 @@ export async function getVolunteers() {
 export async function getAdmins() {
   return await fetchLeaderboardSummary("ADMIN", 0);
 }
+
+// ===============================
+// Points Transfer (point_transactions)
+// ===============================
+
+type VolunteerRow = {
+  id: string;
+  volunteer_code: string;
+  name?: string | null;
+  branch?: string | null;
+  points?: number | null; // ถ้าตารางคุณใช้ชื่ออื่น เดี๋ยวค่อยเปลี่ยน
+};
+
+async function getVolunteerByCodeForPoints(codeRaw: string): Promise<VolunteerRow | null> {
+  const code = String(codeRaw ?? "").trim().toUpperCase();
+  if (!code) return null;
+
+  // สำคัญ: ดึง points มาด้วย เพื่อเช็กยอดก่อนโอน
+  const { data, error } = await supabase
+    .from("volunteers")
+    .select("id, volunteer_code, name, branch, points")
+    .eq("volunteer_code", code)
+    .maybeSingle();
+
+  if (error) {
+    console.error("[Supabase] getVolunteerByCodeForPoints error:", error);
+    return null;
+  }
+  return (data as any) ?? null;
+}
+
+export async function transferPoints(params: {
+  fromVolunteerCode: string;
+  toVolunteerCode: string;
+  amount: number;
+  note?: string;
+}) {
+  const fromCode = String(params.fromVolunteerCode ?? "").trim().toUpperCase();
+  const toCode = String(params.toVolunteerCode ?? "").trim().toUpperCase();
+  const amount = Number(params.amount ?? 0);
+  const note = String(params.note ?? "").trim();
+
+  if (!fromCode || !toCode) throw new Error("กรุณากรอกรหัสผู้โอน/ผู้รับให้ครบ");
+  if (fromCode === toCode) throw new Error("ห้ามโอนให้รหัสเดียวกัน");
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error("จำนวนแต้มต้องมากกว่า 0");
+
+  const [fromV, toV] = await Promise.all([
+    getVolunteerByCodeForPoints(fromCode),
+    getVolunteerByCodeForPoints(toCode),
+  ]);
+
+  if (!fromV) throw new Error(`ไม่พบผู้โอน: ${fromCode}`);
+  if (!toV) throw new Error(`ไม่พบผู้รับ: ${toCode}`);
+
+  const fromPoints = Number(fromV.points ?? 0);
+  if (amount > fromPoints) throw new Error(`แต้มไม่พอ (คงเหลือ ${fromPoints})`);
+
+  // Insert ธุรกรรม -> trigger จะไปอัปเดต points ให้เอง
+  const { data, error } = await supabase
+    .from("point_transactions")
+    .insert({
+      from_volunteer_id: fromV.id,
+      to_volunteer_id: toV.id,
+      amount,
+      type: "transfer",
+      note: note || `transfer ${fromCode} -> ${toCode}`,
+    })
+    .select("*")
+    .maybeSingle();
+
+  if (error) {
+    console.error("[Supabase] transferPoints insert error:", error);
+    throw new Error(error.message);
+  }
+
+  return data;
+}
+
+// ใช้ refresh หน้าจอหลังโอน: ดึง points ปัจจุบัน
+export async function fetchVolunteerPointsByCode(volunteerCode: string) {
+  const v = await getVolunteerByCodeForPoints(volunteerCode);
+  if (!v) return null;
+  return { points: Number(v.points ?? 0), id: v.id, volunteer_code: v.volunteer_code };
+}
