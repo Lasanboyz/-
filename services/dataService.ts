@@ -1,17 +1,17 @@
 // services/dataService.ts
-import { Volunteer, Transaction, Reward, RedemptionRequest, RankConfig } from '../types';
-import { supabase } from './supabaseClient';
+import { Volunteer, Reward, RedemptionRequest, RankConfig } from "../types";
+import { supabase } from "./supabaseClient";
 
 // ===============================
 // Utils (Thai Year)
 // ===============================
 export const getCurrentThaiYear = () => {
   const date = new Date();
-  return date.getFullYear() + 543; // AD + 543
+  return date.getFullYear() + 543;
 };
 
 export const getFiscalYear = (date: Date) => {
-  return date.getFullYear() + 543; // Simple Thai Year
+  return date.getFullYear() + 543;
 };
 
 // ===============================
@@ -26,17 +26,50 @@ class DataService {
   }
 
   private initLocal() {
-    // Requests from localStorage
-    const savedReqs = localStorage.getItem('requests_v16');
+    const savedReqs = localStorage.getItem("requests_v16");
     if (savedReqs) this.redemptionRequests = JSON.parse(savedReqs);
 
-    // Rewards (temporary static)
     this.rewards = [
-      { id: 'r1', name: 'กระเป๋าผ้าลดโลกร้อน', cost: 50, stock: 10, imageUrl: 'https://i.postimg.cc/d1c6T7xn/1768933261970.jpg?auto=format&fit=crop&q=80&w=300' },
-      { id: 'r2', name: 'แก้วน้ำเก็บความเย็น', cost: 100, stock: 10, imageUrl: 'https://images.unsplash.com/photo-1602143407151-7111542de6e8?auto=format&fit=crop&q=80&w=300' },
-      { id: 'r3', name: 'เสื้อยืดอาสา', cost: 100, stock: 10, imageUrl: 'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&q=80&w=300' },
-      { id: 'r4', name: 'หมวกร่มลมเย็น', cost: 100, stock: 10, imageUrl: 'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&q=80&w=300' },
-      { id: 'r5', name: 'บัตรกำนัล 100 บาท', cost: 100, stock: 10, imageUrl: 'https://i.postimg.cc/XNdJ8rDC/images-(27).jpg?auto=format&fit=crop&q=80&w=300' },
+      {
+        id: "r1",
+        name: "กระเป๋าผ้าลดโลกร้อน",
+        cost: 50,
+        stock: 10,
+        imageUrl:
+          "https://i.postimg.cc/d1c6T7xn/1768933261970.jpg?auto=format&fit=crop&q=80&w=300",
+      },
+      {
+        id: "r2",
+        name: "แก้วน้ำเก็บความเย็น",
+        cost: 100,
+        stock: 10,
+        imageUrl:
+          "https://images.unsplash.com/photo-1602143407151-7111542de6e8?auto=format&fit=crop&q=80&w=300",
+      },
+      {
+        id: "r3",
+        name: "เสื้อยืดอาสา",
+        cost: 100,
+        stock: 10,
+        imageUrl:
+          "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&q=80&w=300",
+      },
+      {
+        id: "r4",
+        name: "หมวกร่มลมเย็น",
+        cost: 100,
+        stock: 10,
+        imageUrl:
+          "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&q=80&w=300",
+      },
+      {
+        id: "r5",
+        name: "บัตรกำนัล 100 บาท",
+        cost: 100,
+        stock: 10,
+        imageUrl:
+          "https://i.postimg.cc/XNdJ8rDC/images-(27).jpg?auto=format&fit=crop&q=80&w=300",
+      },
     ];
   }
 
@@ -50,14 +83,17 @@ class DataService {
 
   public addRequest(req: RedemptionRequest) {
     this.redemptionRequests.push(req);
-    localStorage.setItem('requests_v16', JSON.stringify(this.redemptionRequests));
+    localStorage.setItem("requests_v16", JSON.stringify(this.redemptionRequests));
   }
 
   public updateRequest(req: RedemptionRequest) {
-    const idx = this.redemptionRequests.findIndex(r => r.id === req.id);
+    const idx = this.redemptionRequests.findIndex((r) => r.id === req.id);
     if (idx >= 0) {
       this.redemptionRequests[idx] = req;
-      localStorage.setItem('requests_v16', JSON.stringify(this.redemptionRequests));
+      localStorage.setItem(
+        "requests_v16",
+        JSON.stringify(this.redemptionRequests)
+      );
     }
   }
 }
@@ -69,32 +105,52 @@ export const dataService = new DataService();
 // ===============================
 export function getRank(points: number, activityCount: number = 0): RankConfig {
   if (points > 200 || activityCount > 10) {
-    return { name: 'ผู้มีพลังขับเคลื่อนสังคม', minPoints: 201, icon: '🔥', color: 'bg-orange-100 text-orange-600' };
+    return {
+      name: "ผู้มีพลังขับเคลื่อนสังคม",
+      minPoints: 201,
+      icon: "🔥",
+      color: "bg-orange-100 text-orange-600",
+    };
   }
   if (points > 100 || activityCount >= 5) {
-    return { name: 'นักสร้างสรรค์แบ่งปันโอกาส', minPoints: 101, icon: '🌳', color: 'bg-teal-100 text-teal-600' };
+    return {
+      name: "นักสร้างสรรค์แบ่งปันโอกาส",
+      minPoints: 101,
+      icon: "🌳",
+      color: "bg-teal-100 text-teal-600",
+    };
   }
   if (points > 50 || activityCount >= 3) {
-    return { name: 'เพื่อนชุมชน', minPoints: 51, icon: '🌿', color: 'bg-green-100 text-green-600' };
+    return {
+      name: "เพื่อนชุมชน",
+      minPoints: 51,
+      icon: "🌿",
+      color: "bg-green-100 text-green-600",
+    };
   }
-  return { name: 'ผู้เริ่มต้นแบ่งปัน', minPoints: 0, icon: '🌱', color: 'bg-lime-100 text-lime-600' };
+  return {
+    name: "ผู้เริ่มต้นแบ่งปัน",
+    minPoints: 0,
+    icon: "🌱",
+    color: "bg-lime-100 text-lime-600",
+  };
 }
 
 // ===============================
 // Supabase: Volunteers (Search on Home)
 // ===============================
 export async function fetchVolunteerByCode(volunteerCode: string) {
-  const code = volunteerCode.trim();
+  const code = (volunteerCode ?? "").trim();
   if (!code) return null;
 
   const { data, error } = await supabase
-    .from('volunteers')
-    .select('id, volunteer_code, name, branch')
-    .eq('volunteer_code', code)
+    .from("volunteers")
+    .select("id, volunteer_code, name, branch")
+    .eq("volunteer_code", code)
     .maybeSingle();
 
   if (error) {
-    console.error('[Supabase] fetchVolunteerByCode error:', error);
+    console.error("[Supabase] fetchVolunteerByCode error:", error);
     return null;
   }
 
@@ -104,113 +160,67 @@ export async function fetchVolunteerByCode(volunteerCode: string) {
 // helper: map supabase volunteer row → app Volunteer type
 export function mapVolunteerRowToVolunteer(row: any): Volunteer {
   return {
-    id: row.id,                 // uuid
-    empId: row.volunteer_code,   // volunteer_code
-    name: row.name ?? '',
-    type: row.branch ?? '',
-    // isStaff: จะเช็คจาก activity_history/status ตอนโหลด profile ได้
+    id: row.id,
+    empId: row.volunteer_code,
+    name: row.name ?? "",
+    type: row.branch ?? "",
   } as Volunteer;
 }
 
 // ===============================
-// Supabase: Activity History (Profile / Points / Activity count)
+// Supabase: Activity History
 // ===============================
-
-// ✅ ดึงประวัติ “ทั้งหมด” ของรหัสพนักงาน (ใช้โชว์ list + คำนวณครั้ง)
-export async function fetchActivityHistoryByCode(volunteerCode: string, thaiYear?: number) {
-  const code = volunteerCode.trim();
+export async function fetchActivityHistoryByCode(
+  volunteerCode: string,
+  thaiYear?: number
+) {
+  const code = (volunteerCode ?? "").trim();
   if (!code) return [];
 
   let q = supabase
-    .from('activity_history')
-    .select('id, volunteer_code, name, branch, status, activity_date, thai_year')
-    .eq('volunteer_code', code)
-    .order('activity_date', { ascending: false });
+    .from("activity_history")
+    .select("id, volunteer_code, name, branch, status, activity_date, thai_year")
+    .eq("volunteer_code", code)
+    .order("activity_date", { ascending: false });
 
+  // ถ้าเลือกปี และตารางมี thai_year ครบ จะเร็วขึ้น
   if (thaiYear && thaiYear > 0) {
-    q = q.eq('thai_year', thaiYear);
+    q = q.eq("thai_year", thaiYear);
   }
 
   const { data, error } = await q;
 
   if (error) {
-    console.error('[Supabase] fetchActivityHistoryByCode error:', error);
+    console.error("[Supabase] fetchActivityHistoryByCode error:", error);
     return [];
   }
 
   return data ?? [];
 }
 
-// ✅ คำนวณแต้ม/จำนวนครั้ง จาก activity_history (แทน transactions ก้อนใหญ่)
-export async function getVolunteerSummaryFromHistory(volunteerCode: string, thaiYear: number) {
+export async function getVolunteerSummaryFromHistory(
+  volunteerCode: string,
+  thaiYear: number
+) {
   const rowsThisYear = await fetchActivityHistoryByCode(volunteerCode, thaiYear);
-
   const activityCount = rowsThisYear.length;
 
-  // เงื่อนไขเดิม: ปี 2557-2568 ไม่คิดคะแนน
   let points = 0;
   if (!(thaiYear >= 2557 && thaiYear <= 2568)) {
-    points = activityCount * 20; // 1 ครั้ง = 20 แต้ม (ตามเดิม)
+    points = activityCount * 20;
   }
 
-  // ใช้ status จาก record ล่าสุด (ถ้ามี ADMIN ให้ถือเป็นทีมงาน)
-  const isAdmin = rowsThisYear.some(r => (r.status ?? '') === 'ADMIN');
+  // normalize status
+  const isAdmin = rowsThisYear.some(
+    (r: any) => String(r.status ?? "").trim().toUpperCase() === "ADMIN"
+  );
 
   return { points, activityCount, isAdmin, rowsThisYear };
 }
 
 // ===============================
-// Supabase: Leaderboard
-// ===============================
-export type LeaderboardMode = 'VOLUNTEERS' | 'ADMIN';
-
-// view ที่เราสร้างไว้
-const leaderboardTable = (mode: LeaderboardMode) =>
-  mode === 'ADMIN' ? 'leaderboard_admin' : 'leaderboard_volunteers';
-
-export async function fetchLeaderboard(mode: LeaderboardMode, thaiYear?: number) {
-  let q = supabase
-    .from(leaderboardTable(mode))
-    .select('*')
-    .limit(500);
-
-  // ✅ ถ้าเลือกปี (ไม่ใช่ 0) ให้กรองตามปี
-  if (thaiYear && thaiYear > 0) {
-    q = q.eq('thai_year', thaiYear);
-  }
-
-  const { data, error } = await q;
-
-  if (error) {
-    console.error('[Supabase] fetchLeaderboard error:', error);
-    return [];
-  }
-
-  return data ?? [];
-}
-
-// ===============================
-// (Optional) Transfer / Points Transactions (ยังไม่เปิดใช้จริง)
-// ===============================
-// ถ้าจะทำ “โอนแต้มจริง” เราจะไปผูกกับ table point_transactions + RLS ทีหลัง
-// ===============================
-// Backward-compat (for old Leaderboard.tsx)
-// ===============================
-
-// Leaderboard.tsx เก่าๆ บางเวอร์ชันเรียก getVolunteers()
-// เราทำ alias ให้เพื่อกันหน้า /leaderboard พัง
-export async function getVolunteers() {
-  return await fetchLeaderboard('VOLUNTEERS');
-}
-
-// เผื่อ Leaderboard.tsx เรียก getAdmins() ด้วย (กันพังไว้ก่อน)
-export async function getAdmins() {
-  return await fetchLeaderboard('ADMIN');
-}
-// ===============================
 // Leaderboard (Compute from activity_history directly) ✅ ไม่พึ่ง view
 // ===============================
-
 export type LeaderboardMode = "VOLUNTEERS" | "ADMIN";
 
 type ActivityRow = {
@@ -219,168 +229,84 @@ type ActivityRow = {
   branch: string | null;
   status: string | null;
   activity_date: string | null;
-  thai_year: number | null;
+  thai_year: number | string | null;
 };
+
+type LeaderboardSummaryRow = {
+  volunteer_code: string;
+  name: string;
+  branch: string;
+  activity_count: number;
+  points: number;
+  thai_year?: number; // ถ้าเลือกปีเดียว
+  is_staff?: boolean;
+};
+
+// --- Normalizers ---
+const normalizeCode = (v: any) => String(v ?? "").trim().toUpperCase();
+
+const normalizeStatus = (v: any) => String(v ?? "").trim().toUpperCase();
 
 const toThaiYearFromDate = (dateLike: string) => {
   const d = new Date(dateLike);
-  return d.getFullYear() + 543;
+  if (Number.isNaN(d.getTime())) return undefined;
+  // กัน timezone ข้ามปีแบบแปลก ๆ
+  return d.getUTCFullYear() + 543;
 };
 
-export async function fetchLeaderboardSummary(mode: LeaderboardMode, thaiYear: number) {
+const parseThaiYear = (v: any) => {
+  if (v === null || v === undefined || v === "") return undefined;
+  const n = typeof v === "number" ? v : Number(String(v).trim());
+  if (!Number.isFinite(n)) return undefined;
+  // guard range แบบคร่าว ๆ
+  if (n < 2400 || n > 2700) return undefined;
+  return n;
+};
+
+const isNoScoreYear = (year: number) => year >= 2557 && year <= 2568;
+
+// ✅ main function
+export async function fetchLeaderboardSummary(
+  mode: LeaderboardMode,
+  thaiYear: number
+): Promise<LeaderboardSummaryRow[]> {
   // thaiYear: 0 = all years
-  let q = supabase
-    .from("activity_history")
-    .select("volunteer_code, name, branch, status, activity_date, thai_year");
+  // IMPORTANT: เราไม่ filter status ที่ query แบบ neq เพราะมันจะ "ตัด null ทิ้ง" ทำให้อาสาหาย
+  // เราจะดึงมาแล้ว filter ใน JS เพื่อให้ logic มั่นใจถูกก่อน
 
-  // filter mode
-  if (mode === "ADMIN") {
-    q = q.eq("status", "ADMIN");
-  } else {
-    // อาสา = ไม่ใช่ ADMIN (รวม null/ว่างด้วย)
-    q = q.neq("status", "ADMIN");
-  }
-
-  // filter year (ถ้าเลือกปี)
-  if (thaiYear && thaiYear !== 0) {
-    // ถ้ามี thai_year ใช้เลย
-    // (ถ้าบางแถว thai_year เป็น null จะหลุดออกไป — แนะนำให้มี thai_year ในตาราง)
-    q = q.eq("thai_year", thaiYear);
-  }
-
-  const { data, error } = await q.limit(5000);
-
-  if (error) {
-    console.error("[Supabase] fetchLeaderboardSummary error:", error);
-    return [];
-  }
-
-  const rows: ActivityRow[] = (data ?? []) as any;
-
-  // aggregate by volunteer_code
-  const map = new Map<
-    string,
-    {
-      volunteer_code: string;
-      name: string;
-      branch: string;
-      activity_count: number;
-      points: number;
-      thai_year?: number; // เผื่อหน้าอยากโชว์
-      is_staff?: boolean;
-    }
-  >();
-
-  for (const r of rows) {
-    const code = (r.volunteer_code ?? "").trim();
-    if (!code) continue;
-
-    // ปีของแถว (เผื่อ all years / หรือ thai_year null)
-    const rowThaiYear =
-      typeof r.thai_year === "number"
-        ? r.thai_year
-        : r.activity_date
-        ? toThaiYearFromDate(r.activity_date)
-        : undefined;
-
-    // ถ้าเลือก "ทั้งหมด" → เอาทุกปี
-    // แต่ถ้าเลือกปีแล้ว และ thai_year null (หรือ parse แล้วไม่ตรง) ให้ข้าม
-    if (thaiYear && thaiYear !== 0) {
-      if (!rowThaiYear || rowThaiYear !== thaiYear) continue;
-    }
-
-    const prev =
-      map.get(code) ??
-      ({
-        volunteer_code: code,
-        name: r.name ?? "",
-        branch: r.branch ?? "",
-        activity_count: 0,
-        points: 0,
-        thai_year: thaiYear !== 0 ? thaiYear : undefined,
-        is_staff: mode === "ADMIN",
-      } as any);
-
-    prev.activity_count += 1;
-
-    // points rule: ปี 2557-2568 = 0
-    const thisYear = rowThaiYear ?? thaiYear;
-    const noScore = typeof thisYear === "number" && thisYear >= 2557 && thisYear <= 2568;
-    const addPoints = noScore ? 0 : 20;
-
-    prev.points += addPoints;
-
-    // update missing name/branch if later row has it
-    if (!prev.name && r.name) prev.name = r.name;
-    if (!prev.branch && r.branch) prev.branch = r.branch;
-
-    map.set(code, prev);
-  }
-
-  return Array.from(map.values());
-}
-// ===============================
-// Leaderboard (compute from activity_history directly)
-// ===============================
-export async function fetchLeaderboardSummary(mode: LeaderboardMode, thaiYear: number) {
-  // thaiYear: 0 = all years
-
-  let q = supabase
+  const { data, error } = await supabase
     .from("activity_history")
     .select("volunteer_code, name, branch, status, activity_date, thai_year")
-    .limit(5000);
-
-  // ✅ mode filter (กันเคส status เพี้ยน/มีเว้นวรรค/ตัวเล็กตัวใหญ่)
-  if (mode === "ADMIN") {
-    q = q.or("status.eq.ADMIN,status.ilike.%ADMIN%");
-  } else {
-    // ✅ อาสา = status ว่าง หรือไม่ใช่ admin
-    q = q.or("status.is.null,status.not.ilike.%ADMIN%");
-  }
-
-  const { data, error } = await q;
+    .limit(10000); // พอสำหรับช่วงนี้ (ทำให้ถูกก่อน)
 
   if (error) {
     console.error("[Supabase] fetchLeaderboardSummary error:", error);
     return [];
   }
 
-  const rows = (data ?? []) as any[];
+  const rows: ActivityRow[] = (data ?? []) as any[];
 
-  const toThaiYearFromDate = (dateLike: string) => {
-    const d = new Date(dateLike);
-    return d.getFullYear() + 543;
-  };
-
-  const map = new Map<
-    string,
-    {
-      volunteer_code: string;
-      name: string;
-      branch: string;
-      activity_count: number;
-      points: number;
-      thai_year?: number;
-      is_staff?: boolean;
-    }
-  >();
+  const map = new Map<string, LeaderboardSummaryRow>();
 
   for (const r of rows) {
-    const code = (r.volunteer_code ?? "").trim();
+    const code = normalizeCode(r.volunteer_code);
     if (!code) continue;
 
-    const rowThaiYear =
-      typeof r.thai_year === "number"
-        ? r.thai_year
-        : r.thai_year
-        ? Number(r.thai_year)
-        : r.activity_date
-        ? toThaiYearFromDate(r.activity_date)
-        : undefined;
+    const status = normalizeStatus(r.status);
+    const isAdmin = status === "ADMIN";
 
-    // ✅ filter year in JS (กันเคส thai_year null)
+    // filter mode
+    if (mode === "ADMIN" && !isAdmin) continue;
+    if (mode === "VOLUNTEERS" && isAdmin) continue;
+
+    // derive thai year per row
+    const yFromCol = parseThaiYear(r.thai_year);
+    const yFromDate = r.activity_date ? toThaiYearFromDate(r.activity_date) : undefined;
+    const rowYear = yFromCol ?? yFromDate;
+
+    // filter year (กันเคส thai_year null)
     if (thaiYear && thaiYear !== 0) {
-      if (!rowThaiYear || rowThaiYear !== thaiYear) continue;
+      if (!rowYear || rowYear !== thaiYear) continue;
     }
 
     const prev =
@@ -393,21 +319,44 @@ export async function fetchLeaderboardSummary(mode: LeaderboardMode, thaiYear: n
         points: 0,
         thai_year: thaiYear !== 0 ? thaiYear : undefined,
         is_staff: mode === "ADMIN",
-      } as any);
+      } as LeaderboardSummaryRow);
 
     prev.activity_count += 1;
 
-    // rule: 2557-2568 = 0 คะแนน
-    const y = rowThaiYear ?? thaiYear;
-    const noScore = typeof y === "number" && y >= 2557 && y <= 2568;
-    prev.points += noScore ? 0 : 20;
+    // points rule
+    if (rowYear && !isNoScoreYear(rowYear)) {
+      prev.points += 20;
+    } else if (!rowYear && thaiYear !== 0 && !isNoScoreYear(thaiYear)) {
+      // fallback กรณีปีเลือกมา แต่ rowYear หาไม่ได้ (แทบไม่ควรเกิด) — ให้คิดตามปีที่เลือก
+      prev.points += 20;
+    }
 
+    // name/branch: ถ้าเดิมว่างแล้วแถวนี้มี ให้เติม
     if (!prev.name && r.name) prev.name = r.name;
     if (!prev.branch && r.branch) prev.branch = r.branch;
 
     map.set(code, prev);
   }
 
-  return Array.from(map.values());
+  // sort ให้ใช้งานง่าย (คะแนนก่อน, แล้วครั้ง)
+  const result = Array.from(map.values()).sort((a, b) => {
+    if (b.points !== a.points) return b.points - a.points;
+    return b.activity_count - a.activity_count;
+  });
+
+  return result;
 }
 
+// ===============================
+// Backward-compat (กันหน้าเก่าพัง)
+// ===============================
+// NOTE: ฟังก์ชันพวกนี้เคยผูก view เดิมไว้
+// ถ้าหน้าไหนยังเรียกอยู่ ให้ไปเปลี่ยนไปใช้ fetchLeaderboardSummary ทีหลัง
+
+export async function getVolunteers() {
+  return await fetchLeaderboardSummary("VOLUNTEERS", 0);
+}
+
+export async function getAdmins() {
+  return await fetchLeaderboardSummary("ADMIN", 0);
+}
