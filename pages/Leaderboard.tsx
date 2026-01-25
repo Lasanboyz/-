@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 
 import {
-  fetchLeaderboard,
+  fetchLeaderboardSummary,
   getCurrentThaiYear,
   getRank,
   type LeaderboardMode,
@@ -24,7 +24,6 @@ interface LeaderboardItem {
   points: number;
   activityCount: number;
   rank: RankConfig;
-  thaiYear?: number; // เผื่อ view ส่งมา
 }
 
 type ViewType = "VOLUNTEER" | "STAFF";
@@ -36,7 +35,6 @@ export const Leaderboard: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Year Logic
   const currentThaiYear = getCurrentThaiYear();
   const maxYear = Math.max(currentThaiYear, 2570);
   const minYear = 2557;
@@ -51,7 +49,6 @@ export const Leaderboard: React.FC = () => {
   const isNoScoreYear = selectedYear >= 2557 && selectedYear <= 2568;
   const isAllYears = selectedYear === 0;
 
-  // ถ้าปีไม่คิดคะแนน หรือเลือกทุกปี → ให้ highlight ที่ “จำนวนครั้ง”
   const highlightActivityCount = isNoScoreYear || isAllYears;
 
   const mode: LeaderboardMode = viewType === "STAFF" ? "ADMIN" : "VOLUNTEERS";
@@ -64,44 +61,28 @@ export const Leaderboard: React.FC = () => {
         setLoading(true);
         setErrorMsg(null);
 
-        const rows: any[] = await fetchLeaderboard(mode);
+        // ✅ ดึงจาก activity_history แล้วคำนวณเอง (แก้ปัญหา view/SQL)
+        const rows: any[] = await fetchLeaderboardSummary(mode, selectedYear);
 
         if (cancelled) return;
 
-        // map row -> item (พยายามรองรับชื่อคอลัมน์หลายแบบ)
         const mapped: LeaderboardItem[] = (rows ?? []).map((r: any) => {
-          const empId =
-            r.volunteer_code ??
-            r.emp_id ??
-            r.empId ??
-            r.code ??
-            r.id ??
-            "";
+          const empId = r.volunteer_code ?? "";
 
-          const points = Number(r.points ?? r.total_points ?? r.score ?? 0);
-          const activityCount = Number(
-            r.activity_count ?? r.activities ?? r.count ?? 0
-          );
-
-          const thaiYear =
-            typeof r.thai_year === "number"
-              ? r.thai_year
-              : r.thai_year
-              ? Number(r.thai_year)
-              : undefined;
+          const points = Number(r.points ?? 0);
+          const activityCount = Number(r.activity_count ?? 0);
 
           const volunteer: Volunteer = {
-            id: r.id ?? r.volunteer_id ?? empId, // เอาไว้ key/route เฉยๆ
-            empId: empId,
+            id: empId, // ใช้เป็น key พอ
+            empId,
             name: r.name ?? "",
-            type: r.branch ?? r.type ?? "",
-            // isStaff: ไม่บังคับใน types บางเวอร์ชัน — ถ้ามีค่อยใส่
+            type: r.branch ?? "",
             ...(typeof r.is_staff === "boolean" ? { isStaff: r.is_staff } : {}),
           } as any;
 
-          // ปีไม่คิดคะแนน -> points = 0 (ถ้า view ส่งแต้มมา)
+          // ปีไม่คิดคะแนน -> points ต้องเป็น 0 (ฟังก์ชันด้านบนคุมไว้แล้ว แต่กันไว้ซ้ำ)
           const pointsAfterRule =
-            thaiYear && thaiYear >= 2557 && thaiYear <= 2568 ? 0 : points;
+            selectedYear !== 0 && selectedYear >= 2557 && selectedYear <= 2568 ? 0 : points;
 
           const rank = getRank(pointsAfterRule, activityCount);
 
@@ -110,50 +91,15 @@ export const Leaderboard: React.FC = () => {
             points: pointsAfterRule,
             activityCount,
             rank,
-            thaiYear,
           };
         });
 
-        /// ✅ filter + aggregate
-let filtered = mapped;
-
-if (selectedYear === 0) {
-  // รวมทุกปี: รวมเป็น 1 แถวต่อ 1 รหัส
-  const mapByEmp = new Map<string, LeaderboardItem>();
-
-  for (const item of mapped) {
-    const key = item.volunteer.empId;
-    const prev = mapByEmp.get(key);
-
-    if (!prev) {
-      mapByEmp.set(key, { ...item });
-    } else {
-      prev.activityCount += item.activityCount;
-      prev.points += item.points;
-      mapByEmp.set(key, prev);
-    }
-  }
-
-  filtered = Array.from(mapByEmp.values()).map((i) => ({
-    ...i,
-    rank: getRank(i.points, i.activityCount),
-  }));
-} else {
-  // เลือกปีเดียว: ใช้เฉพาะปีนั้น
-  const hasThaiYear = mapped.some((m) => typeof m.thaiYear === "number");
-  if (hasThaiYear) {
-    filtered = mapped.filter((m) => m.thaiYear === selectedYear);
-  }
-}
-
         // sort
-        filtered.sort((a, b) => {
-          return highlightActivityCount
-            ? b.activityCount - a.activityCount
-            : b.points - a.points;
-        });
+        mapped.sort((a, b) =>
+          highlightActivityCount ? b.activityCount - a.activityCount : b.points - a.points
+        );
 
-        setItems(filtered);
+        setItems(mapped);
       } catch (e: any) {
         if (cancelled) return;
         console.error("Leaderboard load error:", e);
@@ -186,9 +132,7 @@ if (selectedYear === 0) {
           </div>
         </div>
 
-        {/* Controls */}
         <div className="flex flex-wrap gap-2 w-full sm:w-auto">
-          {/* View Type */}
           <div className="relative flex-grow sm:flex-grow-0">
             <select
               value={viewType}
@@ -203,7 +147,6 @@ if (selectedYear === 0) {
             </div>
           </div>
 
-          {/* Year */}
           <div className="relative flex-grow sm:flex-grow-0">
             <select
               value={selectedYear}
@@ -224,7 +167,6 @@ if (selectedYear === 0) {
         </div>
       </div>
 
-      {/* Banner */}
       <div
         className={`rounded-3xl p-6 text-white shadow-lg text-center relative overflow-hidden transition-all duration-500 ${
           viewType === "VOLUNTEER"
@@ -255,7 +197,6 @@ if (selectedYear === 0) {
         )}
       </div>
 
-      {/* List */}
       <div className="bg-white rounded-2xl shadow-sm border border-pink-100 overflow-hidden min-h-[300px]">
         {loading ? (
           <div className="flex flex-col items-center justify-center h-full py-12 text-gray-400">
