@@ -125,6 +125,38 @@ export function getRank(points: number, activityCount: number = 0): RankConfig {
 }
 
 // ===============================
+// Helpers
+// ===============================
+const normalizeCode = (v: any) => String(v ?? "").trim().toUpperCase();
+const normalizeText = (v: any) => String(v ?? "").trim().toUpperCase();
+
+const isNoScoreYear = (year: number) => year >= 2557 && year <= 2568;
+
+// status เพี้ยน: " admin", "ADMIN ", "Admin", "ทีมงาน ADMIN" ฯลฯ
+const isAdminStatus = (status: any) => {
+  const s = normalizeText(status);
+  if (!s) return false;
+  // เช็คแบบเป็นคำ (กันเคสแปลก ๆ)
+  // แยกด้วยช่องว่าง/เครื่องหมาย
+  const tokens = s.split(/[^A-Z0-9]+/g).filter(Boolean);
+  return tokens.includes("ADMIN");
+};
+
+// activity_date ใน supabase type date -> ส่งมาเป็น "YYYY-MM-DD"
+const thaiYearFromActivityDate = (activityDate: any): number | undefined => {
+  if (!activityDate) return undefined;
+  const d = new Date(`${activityDate}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return undefined;
+  return d.getUTCFullYear() + 543;
+};
+
+const normalizeThaiYear = (v: any): number | undefined => {
+  if (v === null || v === undefined || v === "") return undefined;
+  const n = typeof v === "number" ? v : Number(String(v).trim());
+  return Number.isFinite(n) ? n : undefined;
+};
+
+// ===============================
 // Supabase: Volunteers (Search on Home)
 // ===============================
 export async function fetchVolunteerByCode(volunteerCode: string) {
@@ -166,7 +198,16 @@ export async function fetchActivityHistoryByCode(volunteerCode: string, thaiYear
     .select("id, volunteer_code, name, branch, status, activity_date, thai_year, created_at")
     .eq("volunteer_code", code);
 
-  if (thaiYear && thaiYear > 0) q = q.eq("thai_year", thaiYear);
+  // ถ้าเลือกปี -> เอา thai_year ก่อน (เร็ว) แต่ถ้าบางแถว thai_year null จะหลุด
+  // ดังนั้นเราใช้ OR: thai_year=ปี หรือ (thai_year null และ activity_date อยู่ในช่วงปี)
+  if (thaiYear && thaiYear > 0) {
+    const ad = thaiYear - 543;
+    const start = `${ad}-01-01`;
+    const end = `${ad}-12-31`;
+    q = q.or(
+      `thai_year.eq.${thaiYear},and(thai_year.is.null,activity_date.gte.${start},activity_date.lte.${end})`
+    );
+  }
 
   const { data, error } = await q.order("activity_date", { ascending: false });
 
@@ -183,11 +224,11 @@ export async function getVolunteerSummaryFromHistory(volunteerCode: string, thai
   const activityCount = rowsThisYear.length;
 
   let points = 0;
-  if (!(thaiYear >= 2557 && thaiYear <= 2568)) {
+  if (!isNoScoreYear(thaiYear)) {
     points = activityCount * 20;
   }
 
-  const isAdmin = rowsThisYear.some((r: any) => normalizeStatus(r.status) === "ADMIN");
+  const isAdmin = rowsThisYear.some((r: any) => isAdminStatus(r.status));
   return { points, activityCount, isAdmin, rowsThisYear };
 }
 
@@ -195,15 +236,6 @@ export async function getVolunteerSummaryFromHistory(volunteerCode: string, thai
 // Leaderboard (Compute from activity_history directly) ✅
 // ===============================
 export type LeaderboardMode = "VOLUNTEERS" | "ADMIN";
-
-type ActivityRow = {
-  volunteer_code: string | null;
-  name: string | null;
-  branch: string | null;
-  status: string | null;
-  activity_date: string | null; // "YYYY-MM-DD"
-  thai_year: number | string | null;
-};
 
 export type LeaderboardSummaryRow = {
   volunteer_code: string;
@@ -215,24 +247,6 @@ export type LeaderboardSummaryRow = {
   is_staff?: boolean;
 };
 
-const normalizeCode = (v: any) => String(v ?? "").trim().toUpperCase();
-const normalizeStatus = (v: any) => String(v ?? "").trim().toUpperCase();
-
-const normalizeThaiYear = (v: any): number | undefined => {
-  if (v === null || v === undefined || v === "") return undefined;
-  const n = typeof v === "number" ? v : Number(String(v).trim());
-  return Number.isFinite(n) ? n : undefined;
-};
-
-const thaiYearFromActivityDate = (activityDate: any): number | undefined => {
-  if (!activityDate) return undefined;
-  const d = new Date(`${activityDate}T00:00:00Z`);
-  if (Number.isNaN(d.getTime())) return undefined;
-  return d.getUTCFullYear() + 543;
-};
-
-const isNoScoreYear = (year: number) => year >= 2557 && year <= 2568;
-
 export async function fetchLeaderboardSummary(
   mode: LeaderboardMode,
   thaiYear: number
@@ -242,23 +256,11 @@ export async function fetchLeaderboardSummary(
     .select("volunteer_code, name, branch, status, activity_date, thai_year")
     .limit(20000);
 
-  // ✅ filter mode (กัน status เพี้ยน/เว้นวรรค/ตัวเล็กตัวใหญ่)
-  if (mode === "ADMIN") {
-    q = q.eq("status", "ADMIN");
-  } else {
-    // อาสา = status เป็น null หรือไม่ใช่ ADMIN
-    // NOTE: ใช้ or เพื่อไม่ให้ .neq() ตัด null ทิ้ง
-    q = q.or("status.is.null,status.neq.ADMIN");
-  }
-
-  // ✅ filter year ที่ฝั่ง Supabase ให้ชัวร์
-  // - ถ้ามี thai_year -> ใช้ thai_year
-  // - ถ้า thai_year null -> ใช้ช่วง activity_date ของปีนั้น
+  // ✅ filter year (สำคัญมาก: รองรับ thai_year null ด้วย)
   if (thaiYear && thaiYear !== 0) {
-    const ad = thaiYear - 543; // แปลงเป็น ค.ศ.
+    const ad = thaiYear - 543;
     const start = `${ad}-01-01`;
     const end = `${ad}-12-31`;
-
     q = q.or(
       `thai_year.eq.${thaiYear},and(thai_year.is.null,activity_date.gte.${start},activity_date.lte.${end})`
     );
@@ -273,70 +275,27 @@ export async function fetchLeaderboardSummary(
 
   const rows = (data ?? []) as any[];
 
-  // ✅ debug ให้ดูทันทีว่าปีที่เลือกได้ข้อมูลจริงไหม
   console.log("[fetchLeaderboardSummary] mode/year/rows:", mode, thaiYear, rows.length);
 
-  const map = new Map<string, LeaderboardSummaryRow>();
-
-  for (const r of rows) {
-    const code = String(r.volunteer_code ?? "").trim().toUpperCase();
-    if (!code) continue;
-
-    const prev =
-      map.get(code) ??
-      ({
-        volunteer_code: code,
-        name: r.name ?? "",
-        branch: r.branch ?? "",
-        activity_count: 0,
-        points: 0,
-        thai_year: thaiYear !== 0 ? thaiYear : undefined,
-        is_staff: mode === "ADMIN",
-      } as LeaderboardSummaryRow);
-
-    prev.activity_count += 1;
-
-    // ✅ กติกาคะแนน
-    const effectiveYear =
-      thaiYear !== 0
-        ? thaiYear
-        : typeof r.thai_year === "number"
-        ? r.thai_year
-        : undefined;
-
-    const noScore =
-      typeof effectiveYear === "number" && effectiveYear >= 2557 && effectiveYear <= 2568;
-
-    if (!noScore) prev.points += 20;
-
-    if (!prev.name && r.name) prev.name = r.name;
-    if (!prev.branch && r.branch) prev.branch = r.branch;
-
-    map.set(code, prev);
-  }
-
-  return Array.from(map.values());
-}
-
-  const rows: ActivityRow[] = (data ?? []) as any[];
   const map = new Map<string, LeaderboardSummaryRow>();
 
   for (const r of rows) {
     const code = normalizeCode(r.volunteer_code);
     if (!code) continue;
 
-    const status = normalizeStatus(r.status);
-    const rowIsAdmin = status === "ADMIN";
+    const rowIsAdmin = isAdminStatus(r.status);
 
+    // ✅ filter mode หลังจาก normalize (กัน status เพี้ยน)
     if (mode === "ADMIN" && !rowIsAdmin) continue;
     if (mode === "VOLUNTEERS" && rowIsAdmin) continue;
 
     const yCol = normalizeThaiYear(r.thai_year);
     const yDate = thaiYearFromActivityDate(r.activity_date);
+    const rowYear = yCol ?? yDate;
 
-    // ✅ เลือกปีแบบ OR (แก้ปีไม่ขึ้น)
+    // ✅ ถ้าเลือกปี (กันหลุดอีกชั้น)
     if (thaiYear && thaiYear !== 0) {
-      if (yCol !== thaiYear && yDate !== thaiYear) continue;
+      if (rowYear !== thaiYear) continue;
     }
 
     const prev =
@@ -353,8 +312,8 @@ export async function fetchLeaderboardSummary(
 
     prev.activity_count += 1;
 
-    // คะแนน: ปี 2557–2568 = 0
-    const effectiveYear = thaiYear !== 0 ? thaiYear : (yCol ?? yDate);
+    // ✅ points rule
+    const effectiveYear = thaiYear !== 0 ? thaiYear : rowYear;
     const noScore = typeof effectiveYear === "number" && isNoScoreYear(effectiveYear);
     if (!noScore) prev.points += 20;
 
