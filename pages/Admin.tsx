@@ -19,10 +19,13 @@ import {
   adminGivePoints,
   adminDeductPoints,
   adminFetchPointHistory,
-  createVolunteer, // ✅ ต้องมีใน dataService.ts
+  createVolunteer,
+  adminAddActivity, // ✅ เพิ่ม: ใช้บันทึกกิจกรรม
 } from "../services/dataService";
 
 type TxRow = any;
+
+const toYMD = (d: Date) => d.toISOString().slice(0, 10);
 
 export const Admin: React.FC = () => {
   const navigate = useNavigate();
@@ -44,6 +47,10 @@ export const Admin: React.FC = () => {
   // ===== Adjust points =====
   const [amount, setAmount] = useState<string>("");
   const [note, setNote] = useState<string>("");
+
+  // ✅ NEW: activity toggle + date
+  const [countActivity, setCountActivity] = useState<boolean>(true);
+  const [activityDate, setActivityDate] = useState<string>(toYMD(new Date())); // YYYY-MM-DD
 
   // ===== History =====
   const [history, setHistory] = useState<TxRow[]>([]);
@@ -76,6 +83,10 @@ export const Admin: React.FC = () => {
     setNewCode("");
     setNewName("");
     setNewBranch("BRANCH");
+
+    // ✅ reset activity controls
+    setCountActivity(true);
+    setActivityDate(toYMD(new Date()));
   };
 
   const refreshPointsAndHistory = async (volunteerId: string, volunteerCode: string) => {
@@ -108,10 +119,9 @@ export const Admin: React.FC = () => {
       const row = await fetchVolunteerByCode(code);
 
       if (!row) {
-        // ✅ ไม่พบ -> เปิดฟอร์มสร้างใหม่ทันที
         setMsg(`ไม่พบรหัส "${code}" ในตาราง volunteers — สามารถเพิ่มอาสาใหม่ได้ด้านล่าง`);
         setShowCreate(true);
-        setNewCode(code); // auto fill จากที่ค้นหา
+        setNewCode(code);
         return;
       }
 
@@ -133,27 +143,20 @@ export const Admin: React.FC = () => {
     const name = newName.trim();
     const branch = newBranch === "HO" ? "HO" : "BRANCH";
 
-    if (!code) {
-      setMsg("กรุณากรอกรหัสอาสา");
-      return;
-    }
-    if (!name) {
-      setMsg("กรุณากรอกชื่อ-นามสกุล");
-      return;
-    }
+    if (!code) return setMsg("กรุณากรอกรหัสอาสา");
+    if (!name) return setMsg("กรุณากรอกชื่อ-นามสกุล");
 
     setLoading(true);
     setMsg(null);
 
     try {
-      const created = await createVolunteer({
+      await createVolunteer({
         volunteerCode: code,
         name,
         branch,
         isStaff: false,
       });
 
-      // โหลดใหม่เหมือนค้นหาเจอ
       const row = await fetchVolunteerByCode(code);
       if (!row) throw new Error("สร้างแล้วแต่ค้นหาไม่เจอ (เช็ก RLS/insert result)");
 
@@ -174,11 +177,26 @@ export const Admin: React.FC = () => {
     }
   };
 
+  // ✅ helper: optional add activity
+  const maybeAddActivity = async (volunteerCode: string, status: "VOLUNTEER" | "ADMIN") => {
+    if (!countActivity) return;
+    const ymd = (activityDate || "").trim();
+    if (!ymd) throw new Error("กรุณาเลือกวันที่กิจกรรม");
+
+    await adminAddActivity({
+      volunteer_code: volunteerCode,
+      times: 1,
+      activity_date: ymd,
+      status,
+    });
+  };
+
   const handleGive = async () => {
     if (!v) return;
     const n = Number(amount);
 
-    if (!confirm(`ยืนยัน “เพิ่ม” ${n} แต้ม ให้ ${v.empId}?`)) return;
+    const activityText = countActivity ? ` +นับกิจกรรม(1) วันที่ ${activityDate}` : "";
+    if (!confirm(`ยืนยัน “เพิ่ม” ${n} แต้ม ให้ ${v.empId}?${activityText}`)) return;
 
     setLoading(true);
     setMsg(null);
@@ -189,11 +207,14 @@ export const Admin: React.FC = () => {
         note: note || `admin give`,
       });
 
+      // ✅ NEW: optionally add activity
+      await maybeAddActivity(v.empId, "VOLUNTEER");
+
       setAmount("");
       setNote("");
 
       await refreshPointsAndHistory(v.id, v.empId);
-      setMsg("เพิ่มแต้มสำเร็จ ✅");
+      setMsg(countActivity ? "เพิ่มแต้ม + บันทึกกิจกรรมสำเร็จ ✅" : "เพิ่มแต้มสำเร็จ ✅");
     } catch (e: any) {
       console.error(e);
       setMsg(e?.message ?? "เพิ่มแต้มไม่สำเร็จ");
@@ -206,7 +227,8 @@ export const Admin: React.FC = () => {
     if (!v) return;
     const n = Number(amount);
 
-    if (!confirm(`ยืนยัน “หัก” ${n} แต้ม จาก ${v.empId}?`)) return;
+    const activityText = countActivity ? ` +นับกิจกรรม(1) วันที่ ${activityDate}` : "";
+    if (!confirm(`ยืนยัน “หัก” ${n} แต้ม จาก ${v.empId}?${activityText}`)) return;
 
     setLoading(true);
     setMsg(null);
@@ -217,11 +239,14 @@ export const Admin: React.FC = () => {
         note: note || `admin deduct`,
       });
 
+      // ✅ NEW: optionally add activity (ถ้าคุณต้องการให้ “หัก” ก็สามารถนับกิจกรรมได้เช่นกัน)
+      await maybeAddActivity(v.empId, "VOLUNTEER");
+
       setAmount("");
       setNote("");
 
       await refreshPointsAndHistory(v.id, v.empId);
-      setMsg("หักแต้มสำเร็จ ✅");
+      setMsg(countActivity ? "หักแต้ม + บันทึกกิจกรรมสำเร็จ ✅" : "หักแต้มสำเร็จ ✅");
     } catch (e: any) {
       console.error(e);
       setMsg(e?.message ?? "หักแต้มไม่สำเร็จ");
@@ -290,10 +315,7 @@ export const Admin: React.FC = () => {
                 className="w-full border rounded-xl p-3 pl-10 outline-none focus:ring-2 focus:ring-primary"
                 placeholder="เช่น 80006423 หรือ V000001"
               />
-              <Search
-                size={18}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-              />
+              <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             </div>
           </div>
 
@@ -363,10 +385,7 @@ export const Admin: React.FC = () => {
               <UserPlus size={18} /> สร้างอาสาใหม่
             </button>
 
-            <button
-              onClick={() => setShowCreate(false)}
-              className="text-gray-500 hover:text-gray-800"
-            >
+            <button onClick={() => setShowCreate(false)} className="text-gray-500 hover:text-gray-800">
               ยกเลิก
             </button>
           </div>
@@ -429,6 +448,33 @@ export const Admin: React.FC = () => {
               onChange={(e) => setNote(e.target.value)}
               placeholder="เช่น เพิ่มแต้มจากกิจกรรม / ปรับแก้ข้อมูล"
             />
+
+            {/* ✅ NEW: activity controls */}
+            <div className="mt-3 border rounded-xl p-3 bg-gray-50">
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={countActivity}
+                  onChange={(e) => setCountActivity(e.target.checked)}
+                />
+                นับเป็น “กิจกรรมอาสา” ครั้งนี้
+              </label>
+
+              <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2 items-center">
+                <div className="text-sm text-gray-600">วันที่กิจกรรม</div>
+                <input
+                  type="date"
+                  value={activityDate}
+                  onChange={(e) => setActivityDate(e.target.value)}
+                  disabled={!countActivity || loading}
+                  className="w-full border rounded-xl p-2 outline-none focus:ring-2 focus:ring-primary disabled:opacity-60"
+                />
+              </div>
+
+              <div className="mt-2 text-xs text-gray-500">
+                * ถ้าติ๊ก ระบบจะบันทึกลง activity_history (ใช้แสดงใน Profile และ Leaderboard)
+              </div>
+            </div>
 
             <div className="grid grid-cols-2 gap-3 mt-4">
               <button
