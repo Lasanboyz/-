@@ -90,43 +90,23 @@ class DataService {
 export const dataService = new DataService();
 
 // ===============================
-// Rank logic
+// Rank logic (keep same behavior)
 // ===============================
 export function getRank(points: number, activityCount: number = 0): RankConfig {
   if (points > 200 || activityCount > 10) {
-    return {
-      name: "ผู้มีพลังขับเคลื่อนสังคม",
-      minPoints: 201,
-      icon: "🔥",
-      color: "bg-orange-100 text-orange-600",
-    };
+    return { name: "ผู้มีพลังขับเคลื่อนสังคม", minPoints: 201, icon: "🔥", color: "bg-orange-100 text-orange-600" };
   }
   if (points > 100 || activityCount >= 5) {
-    return {
-      name: "นักสร้างสรรค์แบ่งปันโอกาส",
-      minPoints: 101,
-      icon: "🌳",
-      color: "bg-teal-100 text-teal-600",
-    };
+    return { name: "นักสร้างสรรค์แบ่งปันโอกาส", minPoints: 101, icon: "🌳", color: "bg-teal-100 text-teal-600" };
   }
   if (points > 50 || activityCount >= 3) {
-    return {
-      name: "เพื่อนชุมชน",
-      minPoints: 51,
-      icon: "🌿",
-      color: "bg-green-100 text-green-600",
-    };
+    return { name: "เพื่อนชุมชน", minPoints: 51, icon: "🌿", color: "bg-green-100 text-green-600" };
   }
-  return {
-    name: "ผู้เริ่มต้นแบ่งปัน",
-    minPoints: 0,
-    icon: "🌱",
-    color: "bg-lime-100 text-lime-600",
-  };
+  return { name: "ผู้เริ่มต้นแบ่งปัน", minPoints: 0, icon: "🌱", color: "bg-lime-100 text-lime-600" };
 }
 
 // ===============================
-// Volunteers (Search)
+// Supabase: Volunteers (Search on Home)
 // ===============================
 export async function fetchVolunteerByCode(volunteerCode: string) {
   const code = (volunteerCode ?? "").trim();
@@ -142,6 +122,7 @@ export async function fetchVolunteerByCode(volunteerCode: string) {
     console.error("[Supabase] fetchVolunteerByCode error:", error);
     return null;
   }
+
   return data;
 }
 
@@ -155,51 +136,29 @@ export function mapVolunteerRowToVolunteer(row: any): Volunteer {
 }
 
 // ===============================
-// Activity History
+// Supabase: Activity History
 // ===============================
-
-/**
- * NOTE:
- * ใน DB ของคุณมีโอกาสมี "date_text" (DD/MM/YYYY) แทน "activity_date"
- * ดังนั้นเรา select มาทั้งสองชื่อ แล้วใช้ที่มีจริง
- */
 export async function fetchActivityHistoryByCode(volunteerCode: string, thaiYear?: number) {
   const code = (volunteerCode ?? "").trim();
   if (!code) return [];
 
-  // ดึงให้ครบทั้ง activity_date/date_text เพื่อกัน schema ไม่ตรง
-  const { data, error } = await supabase
+  let q = supabase
     .from("activity_history")
-    .select(
-      "id, volunteer_code, name, branch, status, thai_year, activity_date, date_text"
-    )
-    .eq("volunteer_code", code)
-    // ถ้า activity_date ไม่มีจริง order จะ fail -> เลยไม่ order ใน query
-    .limit(5000);
+    .select("id, volunteer_code, name, branch, status, activity_date, thai_year, created_at")
+    .eq("volunteer_code", code);
+
+  // ปี ถ้ามี thai_year ครบ จะเร็วกว่า
+  if (thaiYear && thaiYear > 0) q = q.eq("thai_year", thaiYear);
+
+  // activity_date เป็น DATE อยู่แล้ว -> order ได้
+  const { data, error } = await q.order("activity_date", { ascending: false });
 
   if (error) {
     console.error("[Supabase] fetchActivityHistoryByCode error:", error);
     return [];
   }
 
-  let rows = (data ?? []) as any[];
-
-  // filter year ใน JS (กัน thai_year null / ชื่อคอลัมน์ไม่ตรง)
-  if (thaiYear && thaiYear > 0) {
-    rows = rows.filter((r) => {
-      const y = deriveRowThaiYear(r);
-      return y === thaiYear;
-    });
-  }
-
-  // sort ล่าสุดก่อน (ใช้ activity_date ถ้ามี ไม่งั้นใช้ date_text)
-  rows.sort((a, b) => {
-    const da = toSortableDate(a);
-    const db = toSortableDate(b);
-    return db - da;
-  });
-
-  return rows;
+  return data ?? [];
 }
 
 export async function getVolunteerSummaryFromHistory(volunteerCode: string, thaiYear: number) {
@@ -217,9 +176,18 @@ export async function getVolunteerSummaryFromHistory(volunteerCode: string, thai
 }
 
 // ===============================
-// Leaderboard Summary (Compute from activity_history)
+// Leaderboard (Compute from activity_history directly) ✅
 // ===============================
 export type LeaderboardMode = "VOLUNTEERS" | "ADMIN";
+
+type ActivityRow = {
+  volunteer_code: string | null;
+  name: string | null;
+  branch: string | null;
+  status: string | null;
+  activity_date: string | null; // Supabase ส่ง date ออกมาเป็น string "YYYY-MM-DD"
+  thai_year: number | null;
+};
 
 export type LeaderboardSummaryRow = {
   volunteer_code: string;
@@ -231,64 +199,22 @@ export type LeaderboardSummaryRow = {
   is_staff?: boolean;
 };
 
-// --- helpers / normalizers ---
+// --- helpers ---
 const normalizeCode = (v: any) => String(v ?? "").trim().toUpperCase();
 const normalizeStatus = (v: any) => String(v ?? "").trim().toUpperCase();
-
 const isNoScoreYear = (year: number) => year >= 2557 && year <= 2568;
 
-// parse thai_year ที่เป็น number/string
-const parseThaiYear = (v: any) => {
-  if (v === null || v === undefined || v === "") return undefined;
-  const n = typeof v === "number" ? v : Number(String(v).trim());
-  if (!Number.isFinite(n)) return undefined;
-  if (n < 2400 || n > 2700) return undefined;
-  return n;
-};
-
-// parse date_text = DD/MM/YYYY => Thai year
-const thaiYearFromDateText = (dateText: any) => {
-  const s = String(dateText ?? "").trim();
-  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (!m) return undefined;
-  const yyyy = Number(m[3]);
-  if (!Number.isFinite(yyyy)) return undefined;
-  return yyyy + 543;
-};
-
-// parse activity_date (ISO/Date) => Thai year
 const thaiYearFromActivityDate = (activityDate: any) => {
   if (!activityDate) return undefined;
-  const d = new Date(activityDate);
+  // activity_date จาก supabase เป็น "YYYY-MM-DD"
+  const d = new Date(`${activityDate}T00:00:00Z`);
   if (Number.isNaN(d.getTime())) return undefined;
   return d.getUTCFullYear() + 543;
 };
 
-// derive row Thai year (priority: thai_year -> activity_date -> date_text)
-const deriveRowThaiYear = (r: any) => {
-  return (
-    parseThaiYear(r.thai_year) ??
-    thaiYearFromActivityDate(r.activity_date) ??
-    thaiYearFromDateText(r.date_text)
-  );
-};
-
-// สำหรับ sort
-const toSortableDate = (r: any) => {
-  if (r.activity_date) {
-    const d = new Date(r.activity_date);
-    if (!Number.isNaN(d.getTime())) return d.getTime();
-  }
-  // date_text DD/MM/YYYY
-  const s = String(r.date_text ?? "").trim();
-  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (!m) return 0;
-  const dd = Number(m[1]);
-  const mm = Number(m[2]);
-  const yyyy = Number(m[3]);
-  const d = new Date(Date.UTC(yyyy, mm - 1, dd));
-  if (Number.isNaN(d.getTime())) return 0;
-  return d.getTime();
+const deriveRowThaiYear = (r: ActivityRow) => {
+  // priority: thai_year > activity_date
+  return (typeof r.thai_year === "number" ? r.thai_year : undefined) ?? thaiYearFromActivityDate(r.activity_date);
 };
 
 // ✅ main function
@@ -296,20 +222,18 @@ export async function fetchLeaderboardSummary(
   mode: LeaderboardMode,
   thaiYear: number
 ): Promise<LeaderboardSummaryRow[]> {
-  // ดึงทั้ง activity_date/date_text เพื่อกัน schema ไม่ตรง
+  // ดึงจาก source จริง
   const { data, error } = await supabase
     .from("activity_history")
-    .select("volunteer_code, name, branch, status, thai_year, activity_date, date_text")
+    .select("volunteer_code, name, branch, status, activity_date, thai_year")
     .limit(20000);
 
   if (error) {
     console.error("[Supabase] fetchLeaderboardSummary error:", error);
-    // สำคัญ: ให้หน้า Leaderboard เห็น error จริง
     throw new Error(error.message);
   }
 
-  const rows = (data ?? []) as any[];
-  console.log("[fetchLeaderboardSummary] raw rows:", rows.length, { mode, thaiYear });
+  const rows: ActivityRow[] = (data ?? []) as any[];
 
   const map = new Map<string, LeaderboardSummaryRow>();
 
@@ -320,13 +244,13 @@ export async function fetchLeaderboardSummary(
     const status = normalizeStatus(r.status);
     const rowIsAdmin = status === "ADMIN";
 
-    // filter mode
+    // แยก mode
     if (mode === "ADMIN" && !rowIsAdmin) continue;
     if (mode === "VOLUNTEERS" && rowIsAdmin) continue;
 
     const rowYear = deriveRowThaiYear(r);
 
-    // filter year
+    // filter ปีที่เลือก
     if (thaiYear && thaiYear !== 0) {
       if (!rowYear || rowYear !== thaiYear) continue;
     }
@@ -343,29 +267,31 @@ export async function fetchLeaderboardSummary(
         is_staff: mode === "ADMIN",
       } as LeaderboardSummaryRow);
 
+    // ✅ นับครั้ง
     prev.activity_count += 1;
 
-    // คะแนน: ปี 2557–2568 = 0
-    const y = rowYear ?? (thaiYear !== 0 ? thaiYear : undefined);
-    if (typeof y === "number" && !isNoScoreYear(y)) {
+    // ✅ คะแนนตามกติกา
+    // ปี 2557–2568 -> ไม่นับคะแนน แต่ยังนับครั้ง
+    if (rowYear && !isNoScoreYear(rowYear)) {
+      prev.points += 20;
+    } else if (!rowYear && thaiYear !== 0 && !isNoScoreYear(thaiYear)) {
+      // fallback กรณีปีเลือกมา แต่ rowYear หาไม่ได้ (ไม่น่าควรเกิด)
       prev.points += 20;
     }
 
+    // เติมชื่อ/สาขาถ้าเดิมว่าง
     if (!prev.name && r.name) prev.name = r.name;
     if (!prev.branch && r.branch) prev.branch = r.branch;
 
     map.set(code, prev);
   }
 
-  // sort: คะแนนก่อน แล้วค่อยจำนวนครั้ง
-  return Array.from(map.values()).sort((a, b) => {
-    if (b.points !== a.points) return b.points - a.points;
-    return b.activity_count - a.activity_count;
-  });
+  // ไม่ sort ที่นี่ก็ได้ เพราะ Leaderboard.tsx sort เองตามปี/โหมด
+  return Array.from(map.values());
 }
 
 // ===============================
-// Backward-compat
+// Backward-compat (กันหน้าเก่าพัง)
 // ===============================
 export async function getVolunteers() {
   return await fetchLeaderboardSummary("VOLUNTEERS", 0);
