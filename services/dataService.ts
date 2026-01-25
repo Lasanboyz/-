@@ -255,6 +255,7 @@ export async function fetchLeaderboardSummary(
     let q = supabase
       .from("activity_history")
       .select("volunteer_code, name, branch, status, activity_date, thai_year")
+      .eq("is_void", false)
       .order("created_at", { ascending: true }) // ให้ pagination เสถียร
       .range(from, from + PAGE_SIZE - 1);
 
