@@ -23,7 +23,7 @@ import {
   adminFetchPointHistory,
   createVolunteer,
 
-  // ✅ activity (new)
+  // ✅ activity
   fetchActivityHistoryByCode,
   adminAddActivityViaApi,
   adminVoidActivityById,
@@ -79,7 +79,7 @@ export const Admin: React.FC = () => {
 
   const canSubmit = useMemo(() => {
     const n = Number(amount);
-    return v && Number.isFinite(n) && n > 0;
+    return Boolean(v) && Number.isFinite(n) && n > 0;
   }, [v, amount]);
 
   const doUnlock = () => {
@@ -117,7 +117,7 @@ export const Admin: React.FC = () => {
     setLoadingHistory(true);
     try {
       const rows = await adminFetchPointHistory(volunteerId);
-      setHistory(rows);
+      setHistory(rows ?? []);
     } finally {
       setLoadingHistory(false);
     }
@@ -136,10 +136,7 @@ export const Admin: React.FC = () => {
 
   const handleSearch = async () => {
     const code = searchCode.trim().toUpperCase();
-    if (!code) {
-      setMsg("กรุณากรอกรหัสก่อนค้นหา");
-      return;
-    }
+    if (!code) return setMsg("กรุณากรอกรหัสก่อนค้นหา");
 
     setLoading(true);
     setMsg(null);
@@ -158,7 +155,6 @@ export const Admin: React.FC = () => {
       const mapped = mapVolunteerRowToVolunteer(row);
       setV(mapped);
 
-      // ✅ role from DB
       const r = String((row as any).role ?? "VOLUNTEER").toUpperCase();
       setRole((["VOLUNTEER", "STAFF", "ADMIN"].includes(r) ? r : "VOLUNTEER") as VolunteerRole);
 
@@ -220,13 +216,13 @@ export const Admin: React.FC = () => {
     if (!v) return;
     if (!countAsActivity) return;
 
-    // ✅ staff ก็ถือเป็น VOLUNTEER ใน activity_history (เพื่อ leaderboard ฝั่งอาสาปกติ)
+    // staff => VOLUNTEER (ขึ้นฝั่ง volunteer leaderboard)
     const status = role === "ADMIN" ? "ADMIN" : "VOLUNTEER";
 
     await adminAddActivityViaApi({
       volunteer_code: v.empId,
       times: Math.max(1, Math.floor(Number(activityTimes || 1))),
-      activity_date: activityDate, // YYYY-MM-DD
+      activity_date: activityDate,
       status,
     });
 
@@ -236,18 +232,14 @@ export const Admin: React.FC = () => {
   const handleGive = async () => {
     if (!v) return;
     const n = Number(amount);
+    if (!Number.isFinite(n) || n <= 0) return setMsg("จำนวนแต้มไม่ถูกต้อง");
     if (!confirm(`ยืนยัน “เพิ่ม” ${n} แต้ม ให้ ${v.empId}?`)) return;
 
     setLoading(true);
     setMsg(null);
     try {
-      await adminGivePoints({
-        toVolunteerCode: v.empId,
-        amount: n,
-        note: note || `admin give`,
-      });
+      await adminGivePoints({ toVolunteerCode: v.empId, amount: n, note: note || "admin give" });
 
-      // ✅ optional: นับเป็นกิจกรรมอาสา
       await doMaybeAddActivity();
 
       setAmount("");
@@ -266,18 +258,16 @@ export const Admin: React.FC = () => {
   const handleDeduct = async () => {
     if (!v) return;
     const n = Number(amount);
+    if (!Number.isFinite(n) || n <= 0) return setMsg("จำนวนแต้มไม่ถูกต้อง");
     if (!confirm(`ยืนยัน “หัก” ${n} แต้ม จาก ${v.empId}?`)) return;
 
     setLoading(true);
     setMsg(null);
     try {
-      await adminDeductPointsViaApi({
-  volunteer_code: v.empId,
-  amount: n,
-  note: note || `admin deduct`,
-});
+      // ✅ ใช้ตัวที่มีอยู่จริงใน dataService.ts ของคุณ
+      await adminDeductPoints({ volunteerCode: v.empId, amount: n, note: note || "admin deduct" });
 
-      // ❌ โดยปกติ “หักแต้ม” ไม่ควรนับเป็นกิจกรรม แต่ถ้าติ๊กไว้ก็ทำให้ได้
+      // โดยปกติ “หักแต้ม” ไม่ควรนับเป็นกิจกรรม แต่ถ้าติ๊กไว้ก็ทำให้ได้
       await doMaybeAddActivity();
 
       setAmount("");
@@ -315,17 +305,12 @@ export const Admin: React.FC = () => {
     if (!v) return;
 
     const id = String(activityId ?? "").trim();
-    if (!id) {
-      setMsg("ไม่พบ activity_id ของรายการนี้");
-      return;
-    }
-
+    if (!id) return setMsg("ไม่พบ activity_id ของรายการนี้");
     if (!confirm("ยืนยันลบกิจกรรมนี้? (จะหายจาก Leaderboard/โปรไฟล์ทันที)")) return;
 
     setLoading(true);
     setMsg(null);
     try {
-      // ✅ FIX: dataService ต้องรับ object { activity_id }
       await adminVoidActivityById({
         activity_id: id,
         void_reason: "Admin deleted",
@@ -379,10 +364,7 @@ export const Admin: React.FC = () => {
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center gap-3">
-        <button
-          onClick={() => navigate("/")}
-          className="inline-flex items-center gap-2 text-gray-500 hover:text-gray-800"
-        >
+        <button onClick={() => navigate("/")} className="inline-flex items-center gap-2 text-gray-500 hover:text-gray-800">
           <ArrowLeft size={18} /> กลับหน้าแรก
         </button>
         <div className="text-gray-300">|</div>
@@ -422,7 +404,7 @@ export const Admin: React.FC = () => {
         )}
       </div>
 
-      {/* Create volunteer (when not found) */}
+      {/* Create volunteer */}
       {showCreate && (
         <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
           <div className="flex items-center gap-2 font-bold text-gray-800 mb-3">
@@ -493,7 +475,6 @@ export const Admin: React.FC = () => {
                 <div className="text-2xl font-bold font-mono">{v.empId}</div>
                 <div className="text-sm text-gray-500 mt-1">สังกัด: {v.type}</div>
 
-                {/* ✅ Role selector */}
                 <div className="mt-3 flex items-center gap-2">
                   <Shield size={16} className="text-gray-400" />
                   <div className="text-sm text-gray-600">บทบาท:</div>
@@ -509,7 +490,6 @@ export const Admin: React.FC = () => {
                   </select>
                 </div>
 
-                {/* ✅ activity count */}
                 <div className="mt-2 text-sm text-gray-500">
                   จำนวนครั้งกิจกรรม: <span className="font-bold text-gray-800">{activityCount}</span>
                   <button
@@ -567,7 +547,6 @@ export const Admin: React.FC = () => {
               placeholder="เช่น เพิ่มแต้มจากกิจกรรม / ปรับแก้ข้อมูล"
             />
 
-            {/* ✅ choose to add activity or not */}
             <div className="mt-4 border rounded-xl p-3 bg-gray-50">
               <label className="flex items-center gap-2 text-sm text-gray-700">
                 <input
@@ -627,7 +606,7 @@ export const Admin: React.FC = () => {
         </div>
       )}
 
-      {/* Activity history + delete */}
+      {/* Activity history */}
       {v && (
         <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
           <div className="flex items-center justify-between mb-3">
@@ -648,9 +627,7 @@ export const Admin: React.FC = () => {
           ) : (
             <div className="space-y-2">
               {activityRows.map((a: any) => {
-                // ✅ DB select มี field "id" แน่นอน (fetchActivityHistoryByCode select id)
                 const id = String(a.id ?? "").trim();
-
                 return (
                   <div key={id} className="border rounded-xl p-3 flex items-center justify-between">
                     <div>
