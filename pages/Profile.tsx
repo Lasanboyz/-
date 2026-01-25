@@ -13,8 +13,14 @@ import {
 } from "lucide-react";
 
 import { supabase as supabaseClient } from "../services/supabaseClient";
-import { fetchVolunteerByCode, getCurrentThaiYear } from "../services/dataService";
-import { Volunteer, Transaction, RankConfig } from "../types";
+import {
+  fetchVolunteerByCode,
+  getCurrentThaiYear,
+  mapVolunteerRowToVolunteer,
+} from "../services/dataService";
+import type { Volunteer, Transaction, RankConfig } from "../types";
+
+const POINTS_PER_ACTIVITY = 20;
 
 export const Profile: React.FC = () => {
   // route: /profile/:id  (id = volunteer_code)
@@ -36,30 +42,61 @@ export const Profile: React.FC = () => {
   const [transferReceiverId, setTransferReceiverId] = useState("");
   const [transferAmount, setTransferAmount] = useState("");
 
-  // ปีที่ “ไม่ระบุ”
-  const isNoScoreYear = selectedYear >= 2557 && selectedYear <= 2568;
-
   // normalize volunteer code from url param
   const volunteerCode = useMemo(() => {
     if (!id) return "";
-    return id.replace(/^v_/, "").trim();
+    return id.replace(/^v_/, "").trim().toUpperCase();
   }, [id]);
 
-  // rank helper
-  const computeRank = (pts: number): RankConfig => {
-    if (pts >= 200) {
-      return { name: "ผู้พิชิตตำนาน", color: "bg-yellow-100 text-yellow-800", icon: "🏅" };
-    }
-    if (pts >= 50) {
-      return { name: "ผู้เริ่มต้นแข็งแกร่ง", color: "bg-green-100 text-green-800", icon: "💪" };
-    }
-    return { name: "ผู้เริ่มต้นแบ่งปัน", color: "bg-lime-100 text-lime-800", icon: "🌱" };
+  // ปีที่ “ไม่คิดคะแนน”
+  const isNoScoreYear = selectedYear >= 2557 && selectedYear <= 2568;
+
+ // rank helper (points OR activityCount)
+const computeRank = (
+  points: number,
+  activityCount: number = 0
+): RankConfig => {
+  if (points > 200 || activityCount > 10) {
+    return {
+      name: "ผู้มีพลังขับเคลื่อนสังคม",
+      icon: "🔥",
+      color: "bg-orange-100 text-orange-600",
+    };
+  }
+  if (points > 100 || activityCount >= 5) {
+    return {
+      name: "นักสร้างสรรค์แบ่งปันโอกาส",
+      icon: "🌳",
+      color: "bg-teal-100 text-teal-600",
+    };
+  }
+  if (points > 50 || activityCount >= 3) {
+    return {
+      name: "เพื่อนชุมชน",
+      icon: "🌿",
+      color: "bg-green-100 text-green-600",
+    };
+  }
+  return {
+    name: "ผู้เริ่มต้นแบ่งปัน",
+    icon: "🌱",
+    color: "bg-lime-100 text-lime-600",
+  };
+};
+
+  const toThaiYearFromDate = (dateLike: string) => {
+    const d = new Date(dateLike);
+    return d.getFullYear() + 543;
   };
 
-  const toThaiYear = (isoDate: string) => {
-    const d = new Date(isoDate);
-    const y = d.getFullYear();
-    return y + 543;
+  // รวม/คำนวณแต้มตามกติกา: ปี 2557-2568 = 0
+  const sumPointsWithRule = (txs: Transaction[], year?: number) => {
+    return txs
+      .filter((t) => (year ? t.thaiYear === year : true))
+      .reduce((sum, t) => {
+        if (t.thaiYear >= 2557 && t.thaiYear <= 2568) return sum + 0;
+        return sum + Number(t.amount ?? 0);
+      }, 0);
   };
 
   // =========================
@@ -80,11 +117,11 @@ export const Profile: React.FC = () => {
         setErrorMsg(null);
 
         // 1) โหลด volunteer จาก service เดิม
-        const data = await fetchVolunteerByCode(volunteerCode);
+        const vRow = await fetchVolunteerByCode(volunteerCode);
 
         if (cancelled) return;
 
-        if (!data) {
+        if (!vRow) {
           setVolunteer(null);
           setTransactions([]);
           setAnnualPoints(0);
@@ -94,61 +131,90 @@ export const Profile: React.FC = () => {
           return;
         }
 
-        const mappedVolunteer: Volunteer = {
-          id: data.id, // uuid จาก Supabase
-          empId: data.volunteer_code, // volunteer_code
-          type: data.branch ?? "", // branch
-        };
-
-        const pts = Number(data.points ?? 0);
-
+        const mappedVolunteer: Volunteer = mapVolunteerRowToVolunteer(vRow);
         setVolunteer(mappedVolunteer);
-        setTotalPoints(pts);
 
-        // ตอนนี้ยังไม่มี point แยกปี -> ให้แสดงเท่ากับ total ไปก่อน
-        setAnnualPoints(pts);
-        setRank(computeRank(pts));
-
-        // 2) โหลดประวัติการโอนจาก Supabase (view)
         // ✅ กันพังกรณี supabaseClient undefined / env ไม่ครบ
         if (!supabaseClient) {
           setTransactions([]);
+          setAnnualPoints(0);
+          setTotalPoints(0);
+          setRank(computeRank(0));
           return;
         }
 
-        const { data: txData, error: txError } = await supabaseClient
-          .from("point_transactions_view")
-          .select("*")
-          .or(`from_volunteer_id.eq.${data.id},to_volunteer_id.eq.${data.id}`)
-          .order("created_at", { ascending: false });
+        // 2) โหลด “กิจกรรม” จาก activity_history (คิด +20/ครั้ง)
+        const { data: actData, error: actErr } = await supabaseClient
+          .from("activity_history")
+          .select("activity_date, thai_year, status")
+          .eq("volunteer_code", volunteerCode)
+          .order("activity_date", { ascending: false });
 
-        if (txError) {
-          console.error("TX load error:", txError);
-          setTransactions([]);
-          return;
+        if (actErr) {
+          console.error("Activity load error:", actErr);
         }
 
-        const mapped: Transaction[] = (txData ?? []).map((t: any) => {
-          const isOut = t.from_volunteer_id === data.id;
-          const amount = Number(t.amount ?? 0);
+        const activityTx: Transaction[] = (actData ?? []).map((a: any, idx: number) => {
+          const thaiYear =
+            Number(a.thai_year) ||
+            (a.activity_date ? toThaiYearFromDate(a.activity_date) : getCurrentThaiYear());
 
           return {
-            id: t.id,
-            volunteerId: data.id,
-            amount: isOut ? -Math.abs(amount) : Math.abs(amount),
-            type: isOut ? "TRANSFER_OUT" : "TRANSFER_IN",
-            description: isOut
-              ? `โอนให้ ${t.to_name ?? t.to_volunteer_code ?? "-"}`
-              : `ได้รับจาก ${t.from_name ?? t.from_volunteer_code ?? "-"}`,
-            date: t.created_at,
-            thaiYear: toThaiYear(t.created_at),
+            id: `act_${thaiYear}_${idx}`,
+            volunteerId: mappedVolunteer.id,
+            amount: POINTS_PER_ACTIVITY,
+            type: "ACTIVITY" as any,
+            description: a?.status === "ADMIN" ? "ร่วมกิจกรรมอาสา (ทีมงาน/Admin)" : "ร่วมกิจกรรมอาสา",
+            date: a.activity_date ?? new Date().toISOString(),
+            thaiYear,
             createdBy: "system",
           } as Transaction;
         });
 
-        setTransactions(mapped);
+        // 3) โหลด “ประวัติการโอน” จาก view (เหมือนของเดิม)
+        const { data: txData, error: txError } = await supabaseClient
+          .from("point_transactions_view")
+          .select("*")
+          .or(`from_volunteer_id.eq.${vRow.id},to_volunteer_id.eq.${vRow.id}`)
+          .order("created_at", { ascending: false });
 
-        // ถ้าอนาคตคุณทำแต้มแยกปีจริง ค่อยคำนวณ annualPoints จาก mapped + selectedYear ได้
+        if (txError) {
+          console.error("TX load error:", txError);
+        }
+
+        const transferTx: Transaction[] = (txData ?? []).map((t: any) => {
+          const isOut = t.from_volunteer_id === vRow.id;
+          const amount = Number(t.amount ?? 0);
+          const createdAt = t.created_at ?? new Date().toISOString();
+
+          return {
+            id: t.id,
+            volunteerId: vRow.id,
+            amount: isOut ? -Math.abs(amount) : Math.abs(amount),
+            type: "TRANSFER" as any,
+            description: isOut
+              ? `โอนให้ ${t.to_name ?? t.to_volunteer_code ?? "-"}`
+              : `ได้รับจาก ${t.from_name ?? t.from_volunteer_code ?? "-"}`,
+            date: createdAt,
+            thaiYear: toThaiYearFromDate(createdAt),
+            createdBy: "system",
+          } as Transaction;
+        });
+
+        // 4) รวมรายการทั้งหมด
+        const allTx = [...transferTx, ...activityTx].sort(
+          (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+        );
+
+        setTransactions(allTx);
+
+        // 5) คำนวณแต้มรวม + แต้มปีปัจจุบัน (ตาม rule ปีไม่คิดคะแนน)
+        const total = sumPointsWithRule(allTx);
+        const annual = sumPointsWithRule(allTx, getCurrentThaiYear());
+
+        setTotalPoints(total);
+        setAnnualPoints(annual);
+        setRank(computeRank(annual));
       } catch (err: any) {
         if (cancelled) return;
         console.error("Profile load error:", err);
@@ -169,6 +235,31 @@ export const Profile: React.FC = () => {
       cancelled = true;
     };
   }, [volunteerCode]);
+
+  // =========================
+  // Recompute Annual points + rank when selectedYear changes
+  // =========================
+  useEffect(() => {
+    if (!transactions || transactions.length === 0) {
+      setAnnualPoints(0);
+      setRank(computeRank(0));
+      return;
+    }
+
+    const year = selectedYear === 0 ? undefined : selectedYear;
+    const pts = year ? sumPointsWithRule(transactions, year) : sumPointsWithRule(transactions, getCurrentThaiYear());
+
+    // ถ้าเลือก "ทั้งหมด" ให้ rank ยึดปีปัจจุบันเหมือนเดิม (ไม่งง)
+    if (selectedYear === 0) {
+      const currentPts = sumPointsWithRule(transactions, getCurrentThaiYear());
+      setAnnualPoints(currentPts);
+      setRank(computeRank(currentPts));
+    } else {
+      setAnnualPoints(pts);
+      setRank(computeRank(pts, transactions.filter(t => t.type === "ACTIVITY").length));
+
+    }
+  }, [selectedYear, transactions]);
 
   // =========================
   // Transfer (ยังไม่ผูก Supabase)
@@ -229,6 +320,7 @@ export const Profile: React.FC = () => {
   const availableYears = Array.from(new Set(transactions.map((t) => t.thaiYear))).sort(
     (a: number, b: number) => b - a
   );
+
   if (!availableYears.includes(getCurrentThaiYear())) {
     availableYears.unshift(getCurrentThaiYear());
   }
@@ -408,7 +500,7 @@ export const Profile: React.FC = () => {
                   type="number"
                   required
                   min="1"
-                  max={totalPoints}
+                  max={Math.max(totalPoints, 1)}
                   placeholder={`สูงสุด ${totalPoints}`}
                   className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none font-bold text-lg"
                   value={transferAmount}
