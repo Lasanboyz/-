@@ -541,3 +541,42 @@ export async function adminFetchPointHistory(volunteerId: string) {
 
   return data ?? [];
 }
+
+// ===============================
+// Admin: Add activity (manual)
+// ===============================
+export async function addActivityOnce(params: {
+  volunteerCode: string;
+  name?: string;
+  branch?: string;
+  status?: "VOLUNTEER" | "ADMIN";
+  activityDate?: string; // YYYY-MM-DD
+}) {
+  const code = params.volunteerCode.trim().toUpperCase();
+  if (!code) throw new Error("volunteerCode is required");
+
+  const date = params.activityDate
+    ? new Date(params.activityDate)
+    : new Date();
+
+  const thaiYear = date.getFullYear() + 543;
+
+  const { error } = await supabase
+    .from("activity_history")
+    .insert({
+      volunteer_code: code,
+      name: params.name ?? null,
+      branch: params.branch ?? null,
+      status: params.status ?? "VOLUNTEER",
+      activity_date: date.toISOString().slice(0, 10),
+      thai_year: thaiYear,
+      is_void: false,
+    });
+
+  if (error) {
+    console.error("[addActivityOnce] error:", error);
+    throw new Error(error.message);
+  }
+
+  return true;
+}
