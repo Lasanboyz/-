@@ -207,4 +207,116 @@ export async function getVolunteers() {
 export async function getAdmins() {
   return await fetchLeaderboard('ADMIN');
 }
+// ===============================
+// Leaderboard (Compute from activity_history directly) ✅ ไม่พึ่ง view
+// ===============================
+
+export type LeaderboardMode = "VOLUNTEERS" | "ADMIN";
+
+type ActivityRow = {
+  volunteer_code: string | null;
+  name: string | null;
+  branch: string | null;
+  status: string | null;
+  activity_date: string | null;
+  thai_year: number | null;
+};
+
+const toThaiYearFromDate = (dateLike: string) => {
+  const d = new Date(dateLike);
+  return d.getFullYear() + 543;
+};
+
+export async function fetchLeaderboardSummary(mode: LeaderboardMode, thaiYear: number) {
+  // thaiYear: 0 = all years
+  let q = supabase
+    .from("activity_history")
+    .select("volunteer_code, name, branch, status, activity_date, thai_year");
+
+  // filter mode
+  if (mode === "ADMIN") {
+    q = q.eq("status", "ADMIN");
+  } else {
+    // อาสา = ไม่ใช่ ADMIN (รวม null/ว่างด้วย)
+    q = q.neq("status", "ADMIN");
+  }
+
+  // filter year (ถ้าเลือกปี)
+  if (thaiYear && thaiYear !== 0) {
+    // ถ้ามี thai_year ใช้เลย
+    // (ถ้าบางแถว thai_year เป็น null จะหลุดออกไป — แนะนำให้มี thai_year ในตาราง)
+    q = q.eq("thai_year", thaiYear);
+  }
+
+  const { data, error } = await q.limit(5000);
+
+  if (error) {
+    console.error("[Supabase] fetchLeaderboardSummary error:", error);
+    return [];
+  }
+
+  const rows: ActivityRow[] = (data ?? []) as any;
+
+  // aggregate by volunteer_code
+  const map = new Map<
+    string,
+    {
+      volunteer_code: string;
+      name: string;
+      branch: string;
+      activity_count: number;
+      points: number;
+      thai_year?: number; // เผื่อหน้าอยากโชว์
+      is_staff?: boolean;
+    }
+  >();
+
+  for (const r of rows) {
+    const code = (r.volunteer_code ?? "").trim();
+    if (!code) continue;
+
+    // ปีของแถว (เผื่อ all years / หรือ thai_year null)
+    const rowThaiYear =
+      typeof r.thai_year === "number"
+        ? r.thai_year
+        : r.activity_date
+        ? toThaiYearFromDate(r.activity_date)
+        : undefined;
+
+    // ถ้าเลือก "ทั้งหมด" → เอาทุกปี
+    // แต่ถ้าเลือกปีแล้ว และ thai_year null (หรือ parse แล้วไม่ตรง) ให้ข้าม
+    if (thaiYear && thaiYear !== 0) {
+      if (!rowThaiYear || rowThaiYear !== thaiYear) continue;
+    }
+
+    const prev =
+      map.get(code) ??
+      ({
+        volunteer_code: code,
+        name: r.name ?? "",
+        branch: r.branch ?? "",
+        activity_count: 0,
+        points: 0,
+        thai_year: thaiYear !== 0 ? thaiYear : undefined,
+        is_staff: mode === "ADMIN",
+      } as any);
+
+    prev.activity_count += 1;
+
+    // points rule: ปี 2557-2568 = 0
+    const thisYear = rowThaiYear ?? thaiYear;
+    const noScore = typeof thisYear === "number" && thisYear >= 2557 && thisYear <= 2568;
+    const addPoints = noScore ? 0 : 20;
+
+    prev.points += addPoints;
+
+    // update missing name/branch if later row has it
+    if (!prev.name && r.name) prev.name = r.name;
+    if (!prev.branch && r.branch) prev.branch = r.branch;
+
+    map.set(code, prev);
+  }
+
+  return Array.from(map.values());
+}
 
