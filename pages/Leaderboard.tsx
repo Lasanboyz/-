@@ -114,14 +114,37 @@ export const Leaderboard: React.FC = () => {
           };
         });
 
-        // filter year (ถ้า view มี thai_year)
-        let filtered = mapped;
-        if (selectedYear !== 0) {
-          const hasThaiYear = mapped.some((m) => typeof m.thaiYear === "number");
-          if (hasThaiYear) {
-            filtered = mapped.filter((m) => m.thaiYear === selectedYear);
-          }
-        }
+        /// ✅ filter + aggregate
+let filtered = mapped;
+
+if (selectedYear === 0) {
+  // รวมทุกปี: รวมเป็น 1 แถวต่อ 1 รหัส
+  const mapByEmp = new Map<string, LeaderboardItem>();
+
+  for (const item of mapped) {
+    const key = item.volunteer.empId;
+    const prev = mapByEmp.get(key);
+
+    if (!prev) {
+      mapByEmp.set(key, { ...item });
+    } else {
+      prev.activityCount += item.activityCount;
+      prev.points += item.points;
+      mapByEmp.set(key, prev);
+    }
+  }
+
+  filtered = Array.from(mapByEmp.values()).map((i) => ({
+    ...i,
+    rank: getRank(i.points, i.activityCount),
+  }));
+} else {
+  // เลือกปีเดียว: ใช้เฉพาะปีนั้น
+  const hasThaiYear = mapped.some((m) => typeof m.thaiYear === "number");
+  if (hasThaiYear) {
+    filtered = mapped.filter((m) => m.thaiYear === selectedYear);
+  }
+}
 
         // sort
         filtered.sort((a, b) => {
