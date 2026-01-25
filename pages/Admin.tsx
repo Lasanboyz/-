@@ -23,7 +23,7 @@ import {
   adminFetchPointHistory,
   createVolunteer,
 
-  // ✅ activity
+  // ✅ activity (new)
   fetchActivityHistoryByCode,
   adminAddActivityViaApi,
   adminVoidActivityById,
@@ -79,7 +79,7 @@ export const Admin: React.FC = () => {
 
   const canSubmit = useMemo(() => {
     const n = Number(amount);
-    return Boolean(v) && Number.isFinite(n) && n > 0;
+    return v && Number.isFinite(n) && n > 0;
   }, [v, amount]);
 
   const doUnlock = () => {
@@ -117,7 +117,7 @@ export const Admin: React.FC = () => {
     setLoadingHistory(true);
     try {
       const rows = await adminFetchPointHistory(volunteerId);
-      setHistory(rows ?? []);
+      setHistory(rows);
     } finally {
       setLoadingHistory(false);
     }
@@ -136,7 +136,10 @@ export const Admin: React.FC = () => {
 
   const handleSearch = async () => {
     const code = searchCode.trim().toUpperCase();
-    if (!code) return setMsg("กรุณากรอกรหัสก่อนค้นหา");
+    if (!code) {
+      setMsg("กรุณากรอกรหัสก่อนค้นหา");
+      return;
+    }
 
     setLoading(true);
     setMsg(null);
@@ -155,14 +158,11 @@ export const Admin: React.FC = () => {
       const mapped = mapVolunteerRowToVolunteer(row);
       setV(mapped);
 
+      // ✅ role from DB
       const r = String((row as any).role ?? "VOLUNTEER").toUpperCase();
       setRole((["VOLUNTEER", "STAFF", "ADMIN"].includes(r) ? r : "VOLUNTEER") as VolunteerRole);
 
-      await Promise.all([
-        refreshPointsAndHistory((row as any).id, code),
-        refreshActivity(code),
-      ]);
-
+      await Promise.all([refreshPointsAndHistory((row as any).id, code), refreshActivity(code)]);
       setMsg(null);
     } catch (e: any) {
       console.error("[Admin] search error:", e);
@@ -196,10 +196,7 @@ export const Admin: React.FC = () => {
       const r = String((row as any).role ?? "VOLUNTEER").toUpperCase();
       setRole((["VOLUNTEER", "STAFF", "ADMIN"].includes(r) ? r : "VOLUNTEER") as VolunteerRole);
 
-      await Promise.all([
-        refreshPointsAndHistory((row as any).id, code),
-        refreshActivity(code),
-      ]);
+      await Promise.all([refreshPointsAndHistory((row as any).id, code), refreshActivity(code)]);
 
       setMsg("เพิ่มอาสาใหม่สำเร็จ ✅");
       setNewName("");
@@ -216,7 +213,7 @@ export const Admin: React.FC = () => {
     if (!v) return;
     if (!countAsActivity) return;
 
-    // staff => VOLUNTEER (ขึ้นฝั่ง volunteer leaderboard)
+    // ✅ staff ก็ถือเป็น VOLUNTEER ใน activity_history
     const status = role === "ADMIN" ? "ADMIN" : "VOLUNTEER";
 
     await adminAddActivityViaApi({
@@ -232,13 +229,16 @@ export const Admin: React.FC = () => {
   const handleGive = async () => {
     if (!v) return;
     const n = Number(amount);
-    if (!Number.isFinite(n) || n <= 0) return setMsg("จำนวนแต้มไม่ถูกต้อง");
     if (!confirm(`ยืนยัน “เพิ่ม” ${n} แต้ม ให้ ${v.empId}?`)) return;
 
     setLoading(true);
     setMsg(null);
     try {
-      await adminGivePoints({ toVolunteerCode: v.empId, amount: n, note: note || "admin give" });
+      await adminGivePoints({
+        toVolunteerCode: v.empId,
+        amount: n,
+        note: note || `admin give`,
+      });
 
       await doMaybeAddActivity();
 
@@ -258,16 +258,18 @@ export const Admin: React.FC = () => {
   const handleDeduct = async () => {
     if (!v) return;
     const n = Number(amount);
-    if (!Number.isFinite(n) || n <= 0) return setMsg("จำนวนแต้มไม่ถูกต้อง");
     if (!confirm(`ยืนยัน “หัก” ${n} แต้ม จาก ${v.empId}?`)) return;
 
     setLoading(true);
     setMsg(null);
     try {
-      // ✅ ใช้ตัวที่มีอยู่จริงใน dataService.ts ของคุณ
-      await adminDeductPoints({ volunteerCode: v.empId, amount: n, note: note || "admin deduct" });
+      // ✅ ใช้ตัวเดิมที่ "update volunteers.points" ให้แต้มลดจริง
+      await adminDeductPoints({
+        volunteerCode: v.empId,
+        amount: n,
+        note: note || `admin deduct`,
+      });
 
-      // โดยปกติ “หักแต้ม” ไม่ควรนับเป็นกิจกรรม แต่ถ้าติ๊กไว้ก็ทำให้ได้
       await doMaybeAddActivity();
 
       setAmount("");
@@ -305,7 +307,11 @@ export const Admin: React.FC = () => {
     if (!v) return;
 
     const id = String(activityId ?? "").trim();
-    if (!id) return setMsg("ไม่พบ activity_id ของรายการนี้");
+    if (!id) {
+      setMsg("ไม่พบ activity_id ของรายการนี้");
+      return;
+    }
+
     if (!confirm("ยืนยันลบกิจกรรมนี้? (จะหายจาก Leaderboard/โปรไฟล์ทันที)")) return;
 
     setLoading(true);
@@ -397,14 +403,10 @@ export const Admin: React.FC = () => {
           </button>
         </div>
 
-        {msg && (
-          <div className="mt-3 text-sm text-gray-700 bg-gray-50 border border-gray-100 rounded-xl p-3">
-            {msg}
-          </div>
-        )}
+        {msg && <div className="mt-3 text-sm text-gray-700 bg-gray-50 border border-gray-100 rounded-xl p-3">{msg}</div>}
       </div>
 
-      {/* Create volunteer */}
+      {/* Create volunteer (when not found) */}
       {showCreate && (
         <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
           <div className="flex items-center gap-2 font-bold text-gray-800 mb-3">
@@ -525,7 +527,6 @@ export const Admin: React.FC = () => {
             </div>
           </div>
 
-          {/* Adjust */}
           <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
             <div className="font-bold text-gray-800 mb-3">เพิ่ม / หัก แต้ม</div>
 
@@ -549,11 +550,7 @@ export const Admin: React.FC = () => {
 
             <div className="mt-4 border rounded-xl p-3 bg-gray-50">
               <label className="flex items-center gap-2 text-sm text-gray-700">
-                <input
-                  type="checkbox"
-                  checked={countAsActivity}
-                  onChange={(e) => setCountAsActivity(e.target.checked)}
-                />
+                <input type="checkbox" checked={countAsActivity} onChange={(e) => setCountAsActivity(e.target.checked)} />
                 นับเป็น “กิจกรรมอาสา” ครั้งนี้
               </label>
 
@@ -606,7 +603,6 @@ export const Admin: React.FC = () => {
         </div>
       )}
 
-      {/* Activity history */}
       {v && (
         <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
           <div className="flex items-center justify-between mb-3">
@@ -659,7 +655,6 @@ export const Admin: React.FC = () => {
         </div>
       )}
 
-      {/* Points History */}
       {v && (
         <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
           <div className="flex items-center gap-2 font-bold text-gray-800 mb-3">
