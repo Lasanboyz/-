@@ -1,9 +1,26 @@
 import React, { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ArrowLeft, Search, PlusCircle, MinusCircle, History, RefreshCcw } from "lucide-react";
+import {
+  ArrowLeft,
+  Search,
+  PlusCircle,
+  MinusCircle,
+  History,
+  RefreshCcw,
+  CalendarPlus,
+} from "lucide-react";
 
-import { fetchVolunteerByCode, mapVolunteerRowToVolunteer, fetchVolunteerPointsByCode } from "../services/dataService";
-import { adminGivePoints, adminDeductPoints, adminFetchPointHistory } from "../services/dataService";
+import {
+  fetchVolunteerByCode,
+  mapVolunteerRowToVolunteer,
+  fetchVolunteerPointsByCode,
+  adminGivePoints,
+  adminDeductPoints,
+  adminFetchPointHistory,
+  // ✅ เพิ่มอันนี้ (ต้องมีอยู่ใน dataService.ts แล้ว)
+  addActivityOnce,
+} from "../services/dataService";
+
 import type { Volunteer } from "../types";
 
 type TxRow = any;
@@ -23,13 +40,20 @@ export const Admin: React.FC = () => {
   const [v, setV] = useState<Volunteer | null>(null);
   const [points, setPoints] = useState<number>(0);
 
-  // Adjust
+  // Adjust points
   const [amount, setAmount] = useState<string>("");
   const [note, setNote] = useState<string>("");
 
-  // History
+  // History (point_transactions)
   const [history, setHistory] = useState<TxRow[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+
+  // ✅ Activity (activity_history)
+  const [activityDate, setActivityDate] = useState<string>(
+    new Date().toISOString().slice(0, 10) // YYYY-MM-DD
+  );
+  const [activityStatus, setActivityStatus] = useState<"VOLUNTEER" | "ADMIN">("VOLUNTEER");
+  const [savingActivity, setSavingActivity] = useState(false);
 
   const ADMIN_PASS = import.meta.env.VITE_ADMIN_PASSCODE || "NTL-Volunteer-2569";
 
@@ -78,7 +102,7 @@ export const Admin: React.FC = () => {
       const mapped = mapVolunteerRowToVolunteer(row);
       setV(mapped);
 
-      // load points
+      // load points + history
       await refreshPointsAndHistory(row.id, code);
     } catch (e: any) {
       console.error(e);
@@ -144,6 +168,50 @@ export const Admin: React.FC = () => {
     }
   };
 
+  // ✅ เพิ่ม “กิจกรรม +1 ครั้ง” (บันทึกลง activity_history)
+  const handleAddActivity = async () => {
+    if (!v) {
+      setMsg("กรุณาค้นหาและเลือกพนักงานก่อน");
+      return;
+    }
+
+    if (!activityDate) {
+      setMsg("กรุณาเลือกวันที่ทำกิจกรรม");
+      return;
+    }
+
+    const confirmText =
+      activityStatus === "ADMIN"
+        ? `ยืนยันบันทึก “กิจกรรม (ทีมงาน/Admin)” 1 ครั้ง ให้ ${v.empId} วันที่ ${activityDate}?`
+        : `ยืนยันบันทึก “กิจกรรมอาสา” 1 ครั้ง ให้ ${v.empId} วันที่ ${activityDate}?`;
+
+    if (!confirm(confirmText)) return;
+
+    setSavingActivity(true);
+    setMsg(null);
+
+    try {
+      await addActivityOnce({
+        volunteerCode: v.empId,
+        name: v.name ?? "",
+        branch: (v.type as any) ?? "",
+        status: activityStatus,
+        activityDate,
+      });
+
+      setMsg("บันทึกกิจกรรมสำเร็จ ✅ (Leaderboard/โปรไฟล์จะอัปเดตตาม activity_history)");
+
+      // ✅ แต้มคงเหลือ (volunteers.points) ไม่ได้ถูกเพิ่มจาก activity_history อยู่แล้ว
+      // แต่เรายัง refresh เพื่ออัปเดต History/แต้ม/ความนิ่งของหน้า
+      await refreshPointsAndHistory(v.id, v.empId);
+    } catch (e: any) {
+      console.error(e);
+      setMsg(e?.message ?? "บันทึกกิจกรรมไม่สำเร็จ");
+    } finally {
+      setSavingActivity(false);
+    }
+  };
+
   if (!unlocked) {
     return (
       <div className="min-h-[70vh] flex items-center justify-center p-6">
@@ -202,7 +270,10 @@ export const Admin: React.FC = () => {
                 className="w-full border rounded-xl p-3 pl-10 outline-none focus:ring-2 focus:ring-primary"
                 placeholder="เช่น 80006423 หรือ CF123456"
               />
-              <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <Search
+                size={18}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+              />
             </div>
           </div>
 
@@ -294,6 +365,44 @@ export const Admin: React.FC = () => {
               * หักแต้มจะ update volunteers.points และบันทึก log type=deduct
             </div>
           </div>
+
+          {/* ✅ Activity +1 */}
+          <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+            <div className="font-bold text-gray-800 mb-3 inline-flex items-center gap-2">
+              <CalendarPlus size={18} /> บันทึก “กิจกรรมอาสา” (+1 ครั้ง)
+            </div>
+
+            <label className="text-sm text-gray-600">วันที่ทำกิจกรรม</label>
+            <input
+              type="date"
+              className="w-full mt-2 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-primary"
+              value={activityDate}
+              onChange={(e) => setActivityDate(e.target.value)}
+            />
+
+            <label className="text-sm text-gray-600 mt-3 block">ประเภทผู้เข้าร่วม</label>
+            <select
+              className="w-full mt-2 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-primary"
+              value={activityStatus}
+              onChange={(e) => setActivityStatus(e.target.value as any)}
+            >
+              <option value="VOLUNTEER">อาสาทั่วไป (VOLUNTEER)</option>
+              <option value="ADMIN">ทีมงาน / Admin (ADMIN)</option>
+            </select>
+
+            <button
+              onClick={handleAddActivity}
+              disabled={savingActivity || loading}
+              className="mt-4 w-full bg-indigo-600 text-white font-bold rounded-xl py-3 hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {savingActivity ? "กำลังบันทึก..." : "บันทึกกิจกรรม +1 ครั้ง"}
+            </button>
+
+            <div className="mt-3 text-xs text-gray-400">
+              * รายการนี้จะถูกเพิ่มในตาราง <b>activity_history</b> <br />
+              * Leaderboard และ Profile จะคำนวณ “จำนวนครั้ง” จาก activity_history อัตโนมัติ
+            </div>
+          </div>
         </div>
       )}
 
@@ -311,10 +420,7 @@ export const Admin: React.FC = () => {
           ) : (
             <div className="space-y-2">
               {history.map((t: any) => (
-                <div
-                  key={t.id}
-                  className="border rounded-xl p-3 flex items-center justify-between"
-                >
+                <div key={t.id} className="border rounded-xl p-3 flex items-center justify-between">
                   <div>
                     <div className="text-sm font-bold text-gray-800">
                       {t.type} • {t.note ?? "-"}
