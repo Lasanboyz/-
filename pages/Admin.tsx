@@ -8,6 +8,8 @@ import {
   History,
   RefreshCcw,
   UserPlus,
+  Trash2,
+  Shield,
 } from "lucide-react";
 
 import type { Volunteer } from "../types";
@@ -20,12 +22,17 @@ import {
   adminDeductPoints,
   adminFetchPointHistory,
   createVolunteer,
-  adminAddActivity, // ✅ เพิ่ม: ใช้บันทึกกิจกรรม
+
+  // ✅ new
+  fetchActivityHistoryByCode,
+  getCurrentThaiYear,
+  adminAddActivityViaApi,
+  adminVoidActivityById,
+  adminUpdateVolunteerRole,
+  type VolunteerRole,
 } from "../services/dataService";
 
 type TxRow = any;
-
-const toYMD = (d: Date) => d.toISOString().slice(0, 10);
 
 export const Admin: React.FC = () => {
   const navigate = useNavigate();
@@ -44,13 +51,22 @@ export const Admin: React.FC = () => {
   const [v, setV] = useState<Volunteer | null>(null);
   const [points, setPoints] = useState<number>(0);
 
+  // ✅ role (from volunteers.role)
+  const [role, setRole] = useState<VolunteerRole>("VOLUNTEER");
+
+  // ✅ activity
+  const [activityRows, setActivityRows] = useState<any[]>([]);
+  const [activityCount, setActivityCount] = useState<number>(0);
+  const [loadingActivity, setLoadingActivity] = useState(false);
+
   // ===== Adjust points =====
   const [amount, setAmount] = useState<string>("");
   const [note, setNote] = useState<string>("");
 
-  // ✅ NEW: activity toggle + date
-  const [countActivity, setCountActivity] = useState<boolean>(true);
-  const [activityDate, setActivityDate] = useState<string>(toYMD(new Date())); // YYYY-MM-DD
+  // ✅ “นับเป็นกิจกรรมอาสา” แบบเลือกได้
+  const [countAsActivity, setCountAsActivity] = useState<boolean>(false);
+  const [activityDate, setActivityDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [activityTimes, setActivityTimes] = useState<number>(1);
 
   // ===== History =====
   const [history, setHistory] = useState<TxRow[]>([]);
@@ -77,30 +93,46 @@ export const Admin: React.FC = () => {
     setV(null);
     setPoints(0);
     setHistory([]);
+    setRole("VOLUNTEER");
+
+    setActivityRows([]);
+    setActivityCount(0);
+
     setAmount("");
     setNote("");
+
+    setCountAsActivity(false);
+    setActivityDate(new Date().toISOString().slice(0, 10));
+    setActivityTimes(1);
+
     setShowCreate(false);
     setNewCode("");
     setNewName("");
     setNewBranch("BRANCH");
-
-    // ✅ reset activity controls
-    setCountActivity(true);
-    setActivityDate(toYMD(new Date()));
   };
 
   const refreshPointsAndHistory = async (volunteerId: string, volunteerCode: string) => {
-    // points
     const p = await fetchVolunteerPointsByCode(volunteerCode);
     setPoints(Number(p?.points ?? 0));
 
-    // history
     setLoadingHistory(true);
     try {
       const rows = await adminFetchPointHistory(volunteerId);
       setHistory(rows);
     } finally {
       setLoadingHistory(false);
+    }
+  };
+
+  const refreshActivity = async (volunteerCode: string) => {
+    setLoadingActivity(true);
+    try {
+      const thaiYear = getCurrentThaiYear();
+      const rows = await fetchActivityHistoryByCode(volunteerCode, thaiYear);
+      setActivityRows(rows);
+      setActivityCount(rows.length);
+    } finally {
+      setLoadingActivity(false);
     }
   };
 
@@ -128,7 +160,15 @@ export const Admin: React.FC = () => {
       const mapped = mapVolunteerRowToVolunteer(row);
       setV(mapped);
 
-      await refreshPointsAndHistory(row.id, code);
+      // ✅ role from DB
+      const r = String((row as any).role ?? "VOLUNTEER").toUpperCase();
+      setRole((["VOLUNTEER", "STAFF", "ADMIN"].includes(r) ? r : "VOLUNTEER") as VolunteerRole);
+
+      await Promise.all([
+        refreshPointsAndHistory(row.id, code),
+        refreshActivity(code),
+      ]);
+
       setMsg(null);
     } catch (e: any) {
       console.error("[Admin] search error:", e);
@@ -150,12 +190,7 @@ export const Admin: React.FC = () => {
     setMsg(null);
 
     try {
-      await createVolunteer({
-        volunteerCode: code,
-        name,
-        branch,
-        isStaff: false,
-      });
+      await createVolunteer({ volunteerCode: code, name, branch, isStaff: false });
 
       const row = await fetchVolunteerByCode(code);
       if (!row) throw new Error("สร้างแล้วแต่ค้นหาไม่เจอ (เช็ก RLS/insert result)");
@@ -164,7 +199,13 @@ export const Admin: React.FC = () => {
       setV(mapped);
       setShowCreate(false);
 
-      await refreshPointsAndHistory(row.id, code);
+      const r = String((row as any).role ?? "VOLUNTEER").toUpperCase();
+      setRole((["VOLUNTEER", "STAFF", "ADMIN"].includes(r) ? r : "VOLUNTEER") as VolunteerRole);
+
+      await Promise.all([
+        refreshPointsAndHistory(row.id, code),
+        refreshActivity(code),
+      ]);
 
       setMsg("เพิ่มอาสาใหม่สำเร็จ ✅");
       setNewName("");
@@ -177,26 +218,27 @@ export const Admin: React.FC = () => {
     }
   };
 
-  // ✅ helper: optional add activity
-  const maybeAddActivity = async (volunteerCode: string, status: "VOLUNTEER" | "ADMIN") => {
-    if (!countActivity) return;
-    const ymd = (activityDate || "").trim();
-    if (!ymd) throw new Error("กรุณาเลือกวันที่กิจกรรม");
+  const doMaybeAddActivity = async () => {
+    if (!v) return;
+    if (!countAsActivity) return;
 
-    await adminAddActivity({
-      volunteer_code: volunteerCode,
-      times: 1,
-      activity_date: ymd,
+    // ✅ staff ก็ถือเป็น VOLUNTEER ใน activity_history (เพื่อ leaderboard ฝั่งอาสาปกติ)
+    const status = role === "ADMIN" ? "ADMIN" : "VOLUNTEER";
+
+    await adminAddActivityViaApi({
+      volunteer_code: v.empId,
+      times: Math.max(1, Math.floor(Number(activityTimes || 1))),
+      activity_date: activityDate, // YYYY-MM-DD
       status,
     });
+
+    await refreshActivity(v.empId);
   };
 
   const handleGive = async () => {
     if (!v) return;
     const n = Number(amount);
-
-    const activityText = countActivity ? ` +นับกิจกรรม(1) วันที่ ${activityDate}` : "";
-    if (!confirm(`ยืนยัน “เพิ่ม” ${n} แต้ม ให้ ${v.empId}?${activityText}`)) return;
+    if (!confirm(`ยืนยัน “เพิ่ม” ${n} แต้ม ให้ ${v.empId}?`)) return;
 
     setLoading(true);
     setMsg(null);
@@ -207,14 +249,14 @@ export const Admin: React.FC = () => {
         note: note || `admin give`,
       });
 
-      // ✅ NEW: optionally add activity
-      await maybeAddActivity(v.empId, "VOLUNTEER");
+      // ✅ optional: นับเป็นกิจกรรมอาสา
+      await doMaybeAddActivity();
 
       setAmount("");
       setNote("");
 
       await refreshPointsAndHistory(v.id, v.empId);
-      setMsg(countActivity ? "เพิ่มแต้ม + บันทึกกิจกรรมสำเร็จ ✅" : "เพิ่มแต้มสำเร็จ ✅");
+      setMsg("เพิ่มแต้มสำเร็จ ✅");
     } catch (e: any) {
       console.error(e);
       setMsg(e?.message ?? "เพิ่มแต้มไม่สำเร็จ");
@@ -226,9 +268,7 @@ export const Admin: React.FC = () => {
   const handleDeduct = async () => {
     if (!v) return;
     const n = Number(amount);
-
-    const activityText = countActivity ? ` +นับกิจกรรม(1) วันที่ ${activityDate}` : "";
-    if (!confirm(`ยืนยัน “หัก” ${n} แต้ม จาก ${v.empId}?${activityText}`)) return;
+    if (!confirm(`ยืนยัน “หัก” ${n} แต้ม จาก ${v.empId}?`)) return;
 
     setLoading(true);
     setMsg(null);
@@ -239,17 +279,58 @@ export const Admin: React.FC = () => {
         note: note || `admin deduct`,
       });
 
-      // ✅ NEW: optionally add activity (ถ้าคุณต้องการให้ “หัก” ก็สามารถนับกิจกรรมได้เช่นกัน)
-      await maybeAddActivity(v.empId, "VOLUNTEER");
+      // ❌ โดยปกติ “หักแต้ม” ไม่ควรนับเป็นกิจกรรม แต่ถ้าติ๊กไว้ก็ทำให้ได้
+      await doMaybeAddActivity();
 
       setAmount("");
       setNote("");
 
       await refreshPointsAndHistory(v.id, v.empId);
-      setMsg(countActivity ? "หักแต้ม + บันทึกกิจกรรมสำเร็จ ✅" : "หักแต้มสำเร็จ ✅");
+      setMsg("หักแต้มสำเร็จ ✅");
     } catch (e: any) {
       console.error(e);
       setMsg(e?.message ?? "หักแต้มไม่สำเร็จ");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleChangeRole = async (next: VolunteerRole) => {
+    if (!v) return;
+    if (!confirm(`ยืนยันเปลี่ยนบทบาท ${v.empId} เป็น ${next}?`)) return;
+
+    setLoading(true);
+    setMsg(null);
+    try {
+      await adminUpdateVolunteerRole({ volunteer_code: v.empId, role: next });
+      setRole(next);
+      setMsg("อัปเดตบทบาทสำเร็จ ✅");
+    } catch (e: any) {
+      console.error(e);
+      setMsg(e?.message ?? "อัปเดตบทบาทไม่สำเร็จ");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVoidActivity = async (activityId: string) => {
+    if (!v) return;
+    if (!confirm("ยืนยันลบกิจกรรมนี้? (จะหายจาก Leaderboard/โปรไฟล์ทันที)")) return;
+
+    setLoading(true);
+    setMsg(null);
+    try {
+      await adminVoidActivityById({
+        activity_id: activityId,
+        void_reason: "Admin deleted",
+        void_by: "ADMIN",
+      });
+
+      await refreshActivity(v.empId);
+      setMsg("ลบกิจกรรมสำเร็จ ✅");
+    } catch (e: any) {
+      console.error(e);
+      setMsg(e?.message ?? "ลบกิจกรรมไม่สำเร็จ");
     } finally {
       setLoading(false);
     }
@@ -315,7 +396,10 @@ export const Admin: React.FC = () => {
                 className="w-full border rounded-xl p-3 pl-10 outline-none focus:ring-2 focus:ring-primary"
                 placeholder="เช่น 80006423 หรือ V000001"
               />
-              <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <Search
+                size={18}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+              />
             </div>
           </div>
 
@@ -385,7 +469,10 @@ export const Admin: React.FC = () => {
               <UserPlus size={18} /> สร้างอาสาใหม่
             </button>
 
-            <button onClick={() => setShowCreate(false)} className="text-gray-500 hover:text-gray-800">
+            <button
+              onClick={() => setShowCreate(false)}
+              className="text-gray-500 hover:text-gray-800"
+            >
               ยกเลิก
             </button>
           </div>
@@ -405,13 +492,44 @@ export const Admin: React.FC = () => {
                 <div className="text-xs text-gray-500">รหัส</div>
                 <div className="text-2xl font-bold font-mono">{v.empId}</div>
                 <div className="text-sm text-gray-500 mt-1">สังกัด: {v.type}</div>
+
+                {/* ✅ Role selector */}
+                <div className="mt-3 flex items-center gap-2">
+                  <Shield size={16} className="text-gray-400" />
+                  <div className="text-sm text-gray-600">บทบาท:</div>
+                  <select
+                    value={role}
+                    onChange={(e) => handleChangeRole(e.target.value as VolunteerRole)}
+                    className="border rounded-lg px-3 py-2 text-sm outline-none"
+                    disabled={loading}
+                  >
+                    <option value="VOLUNTEER">VOLUNTEER</option>
+                    <option value="STAFF">STAFF</option>
+                    <option value="ADMIN">ADMIN</option>
+                  </select>
+                </div>
+
+                {/* ✅ activity count */}
+                <div className="mt-2 text-sm text-gray-500">
+                  จำนวนครั้งกิจกรรมปีนี้: <span className="font-bold text-gray-800">{activityCount}</span>
+                  <button
+                    onClick={() => refreshActivity(v.empId)}
+                    className="ml-3 text-xs text-gray-500 hover:text-gray-800"
+                    disabled={loadingActivity}
+                  >
+                    {loadingActivity ? "กำลังโหลด..." : "Refresh"}
+                  </button>
+                </div>
               </div>
 
               <div className="text-right">
                 <div className="text-xs text-gray-500">แต้มคงเหลือ</div>
                 <div className="text-3xl font-bold text-primary">{points}</div>
                 <button
-                  onClick={() => refreshPointsAndHistory(v.id, v.empId)}
+                  onClick={() => {
+                    refreshPointsAndHistory(v.id, v.empId);
+                    refreshActivity(v.empId);
+                  }}
                   className="mt-2 inline-flex items-center gap-2 text-xs text-gray-500 hover:text-gray-800"
                 >
                   <RefreshCcw size={14} /> Refresh
@@ -449,31 +567,43 @@ export const Admin: React.FC = () => {
               placeholder="เช่น เพิ่มแต้มจากกิจกรรม / ปรับแก้ข้อมูล"
             />
 
-            {/* ✅ NEW: activity controls */}
-            <div className="mt-3 border rounded-xl p-3 bg-gray-50">
+            {/* ✅ choose to add activity or not */}
+            <div className="mt-4 border rounded-xl p-3 bg-gray-50">
               <label className="flex items-center gap-2 text-sm text-gray-700">
                 <input
                   type="checkbox"
-                  checked={countActivity}
-                  onChange={(e) => setCountActivity(e.target.checked)}
+                  checked={countAsActivity}
+                  onChange={(e) => setCountAsActivity(e.target.checked)}
                 />
                 นับเป็น “กิจกรรมอาสา” ครั้งนี้
               </label>
 
-              <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2 items-center">
-                <div className="text-sm text-gray-600">วันที่กิจกรรม</div>
-                <input
-                  type="date"
-                  value={activityDate}
-                  onChange={(e) => setActivityDate(e.target.value)}
-                  disabled={!countActivity || loading}
-                  className="w-full border rounded-xl p-2 outline-none focus:ring-2 focus:ring-primary disabled:opacity-60"
-                />
-              </div>
-
-              <div className="mt-2 text-xs text-gray-500">
-                * ถ้าติ๊ก ระบบจะบันทึกลง activity_history (ใช้แสดงใน Profile และ Leaderboard)
-              </div>
+              {countAsActivity && (
+                <div className="grid grid-cols-2 gap-3 mt-3">
+                  <div>
+                    <label className="text-xs text-gray-600">วันที่กิจกรรม</label>
+                    <input
+                      type="date"
+                      value={activityDate}
+                      onChange={(e) => setActivityDate(e.target.value)}
+                      className="w-full mt-1 border rounded-lg px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-600">จำนวนครั้ง</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={activityTimes}
+                      onChange={(e) => setActivityTimes(Number(e.target.value))}
+                      className="w-full mt-1 border rounded-lg px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div className="col-span-2 text-xs text-gray-500">
+                    * ถ้า role = ADMIN ระบบจะบันทึกกิจกรรมเป็น ADMIN เพื่อขึ้น Leaderboard ฝั่ง Admin
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-3 mt-4">
@@ -497,7 +627,57 @@ export const Admin: React.FC = () => {
         </div>
       )}
 
-      {/* History */}
+      {/* Activity history + delete */}
+      {v && (
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <div className="flex items-center justify-between mb-3">
+            <div className="font-bold text-gray-800">ประวัติกิจกรรมอาสา (ปีปัจจุบัน)</div>
+            <button
+              onClick={() => refreshActivity(v.empId)}
+              className="text-xs text-gray-500 hover:text-gray-800"
+              disabled={loadingActivity}
+            >
+              {loadingActivity ? "กำลังโหลด..." : "Refresh"}
+            </button>
+          </div>
+
+          {loadingActivity ? (
+            <div className="text-sm text-gray-400">Loading activity...</div>
+          ) : activityRows.length === 0 ? (
+            <div className="text-sm text-gray-400">ยังไม่มีประวัติกิจกรรม</div>
+          ) : (
+            <div className="space-y-2">
+              {activityRows.map((a: any) => (
+                <div key={a.id} className="border rounded-xl p-3 flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-bold text-gray-800">
+                      {a.status} • {a.activity_date}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      created: {new Date(a.created_at).toLocaleString("th-TH")}
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => handleVoidActivity(a.id)}
+                    className="inline-flex items-center gap-2 text-sm text-red-600 hover:text-red-700"
+                    disabled={loading}
+                    title="ลบ (void)"
+                  >
+                    <Trash2 size={16} /> ลบ
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="mt-3 text-xs text-gray-400">
+            * การลบคือการ “void” ทำให้หายจาก Profile และ Leaderboard ทันที (เพราะระบบนับเฉพาะ is_void=false)
+          </div>
+        </div>
+      )}
+
+      {/* Points History */}
       {v && (
         <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
           <div className="flex items-center gap-2 font-bold text-gray-800 mb-3">
@@ -532,6 +712,11 @@ export const Admin: React.FC = () => {
               ))}
             </div>
           )}
+
+          <div className="mt-3 text-xs text-gray-400">
+            * (หมายเหตุ) ลบ “ประวัติแต้ม” แบบหายจริงต้องเพิ่มระบบ void ใน point_transactions ด้วย
+            แต่ตอนนี้คุณขอให้ Leaderboard หาย = เราลบกิจกรรม (activity_history) ให้ได้ก่อนแบบจบ ๆ
+          </div>
         </div>
       )}
     </div>
