@@ -271,11 +271,11 @@ export const Admin: React.FC = () => {
     setLoading(true);
     setMsg(null);
     try {
-      await adminDeductPoints({
-        volunteerCode: v.empId,
-        amount: n,
-        note: note || `admin deduct`,
-      });
+      await adminDeductPointsViaApi({
+  volunteer_code: v.empId,
+  amount: n,
+  note: note || `admin deduct`,
+});
 
       // ❌ โดยปกติ “หักแต้ม” ไม่ควรนับเป็นกิจกรรม แต่ถ้าติ๊กไว้ก็ทำให้ได้
       await doMaybeAddActivity();
