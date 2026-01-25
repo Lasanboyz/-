@@ -72,14 +72,18 @@ export const Profile: React.FC = () => {
     return d.getFullYear() + 543;
   };
 
-  const sumPointsWithRule = (txs: Transaction[], year?: number) => {
-    return txs
-      .filter((t) => (year ? t.thaiYear === year : true))
-      .reduce((sum, t) => {
-        if (t.thaiYear >= 2557 && t.thaiYear <= 2568) return sum;
-        return sum + Number(t.amount ?? 0);
-      }, 0);
-  };
+const sumPointsWithRule = (txs: Transaction[], year?: number) => {
+  return txs
+    .filter((t) => (year ? t.thaiYear === year : true))
+    .reduce((sum, t) => {
+      if (t.thaiYear >= 2557 && t.thaiYear <= 2568) return sum;
+
+      // ✅ กันบวกซ้ำ
+      if (String(t.type).toUpperCase() === "ACTIVITY") return sum;
+
+      return sum + Number(t.amount ?? 0);
+    }, 0);
+};
 
   const countActivities = (txs: Transaction[], year: number) => {
     return txs.filter((t) => t.type === "ACTIVITY" && t.thaiYear === year).length;
