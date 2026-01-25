@@ -635,3 +635,76 @@ export async function adminVoidLatestActivity(params: {
 
   return { voided: true, activity_id: latest.id };
 }
+
+// =====================================================
+// ✅ STEP 3.2: Add missing exports for Admin.tsx
+// (paste this at the bottom of dataService.ts)
+// =====================================================
+
+export type VolunteerRole = "VOLUNTEER" | "STAFF" | "ADMIN";
+
+/**
+ * ✅ Add activity via Server API (Service Role)
+ * ใช้ตอนติ๊ก "นับเป็นกิจกรรมอาสา" ใน Admin.tsx
+ */
+export async function adminAddActivityViaApi(params: {
+  volunteer_code: string;
+  times: number;
+  activity_date: string; // YYYY-MM-DD
+  status: "VOLUNTEER" | "ADMIN";
+}) {
+  const volunteer_code = String(params.volunteer_code ?? "").trim().toUpperCase();
+  const times = Math.max(1, Math.floor(Number(params.times ?? 1)));
+  const activity_date = String(params.activity_date ?? "").trim();
+  const status = String(params.status ?? "VOLUNTEER").trim().toUpperCase() as "VOLUNTEER" | "ADMIN";
+
+  if (!volunteer_code) throw new Error("volunteer_code is required");
+  if (!activity_date) throw new Error("activity_date is required (YYYY-MM-DD)");
+  if (!Number.isFinite(times) || times < 1) throw new Error("times must be >= 1");
+  if (!["VOLUNTEER", "ADMIN"].includes(status)) throw new Error("status must be VOLUNTEER|ADMIN");
+
+  return await callAdminApi<{ inserted: number; thai_year: number; volunteer_code: string }>(
+    "/api/admin/addActivity",
+    { volunteer_code, times, activity_date, status }
+  );
+}
+
+/**
+ * ✅ Void activity by activity_id (ให้หายจาก Profile + Leaderboard)
+ * ใช้ตอนกดปุ่ม "ลบ" ในรายการกิจกรรม
+ */
+export async function adminVoidActivityById(params: {
+  activity_id: string;
+  void_reason?: string;
+  void_by?: string;
+}) {
+  const activity_id = String(params.activity_id ?? "").trim();
+  const void_reason = String(params.void_reason ?? "Admin deleted").trim();
+  const void_by = String(params.void_by ?? "ADMIN").trim();
+
+  if (!activity_id) throw new Error("activity_id is required");
+
+  return await callAdminApi<{ voided: boolean; activity_id: string }>(
+    "/api/admin/voidActivity",
+    { activity_id, void_reason, void_by }
+  );
+}
+
+/**
+ * ✅ Update volunteer role (VOLUNTEER / STAFF / ADMIN)
+ * ใช้ตอนเปลี่ยน dropdown บทบาทใน Admin.tsx
+ */
+export async function adminUpdateVolunteerRole(params: { volunteer_code: string; role: VolunteerRole }) {
+  const volunteer_code = String(params.volunteer_code ?? "").trim().toUpperCase();
+  const role = String(params.role ?? "").trim().toUpperCase() as VolunteerRole;
+
+  if (!volunteer_code) throw new Error("volunteer_code is required");
+  if (!["VOLUNTEER", "STAFF", "ADMIN"].includes(role)) {
+    throw new Error("role must be VOLUNTEER|STAFF|ADMIN");
+  }
+
+  return await callAdminApi<{ volunteer_code: string; role: VolunteerRole }>(
+    "/api/admin/updateVolunteerRole",
+    { volunteer_code, role }
+  );
+}
