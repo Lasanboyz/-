@@ -1,522 +1,259 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import {
-  ArrowLeft,
-  Award,
-  Gift,
-  History,
-  Calendar,
-  Send,
-  X,
-  AlertTriangle,
-  User,
-} from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Search, User, Gift, Trophy, Loader2 } from "lucide-react";
+import { fetchVolunteerByCode, mapVolunteerRowToVolunteer } from "../services/dataService";
+import type { Volunteer } from "../types";
 
-import { supabase as supabaseClient } from "../services/supabaseClient";
-import {
-  fetchVolunteerByCode,
-  getCurrentThaiYear,
-  mapVolunteerRowToVolunteer,
-} from "../services/dataService";
-import type { Volunteer, Transaction, RankConfig } from "../types";
+export const Home: React.FC = () => {
+  const navigate = useNavigate();
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
-const POINTS_PER_ACTIVITY = 20;
+  const [searchTerm, setSearchTerm] = useState("");
+  const [result, setResult] = useState<Volunteer | null>(null);
 
-export const Profile: React.FC = () => {
-  // route: /profile/:id  (id = volunteer_code)
-  const { id } = useParams<{ id: string }>();
-
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [notFound, setNotFound] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const [volunteer, setVolunteer] = useState<Volunteer | null>(null);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [selectedYear, setSelectedYear] = useState<number>(getCurrentThaiYear());
+  // UI toast (ไม่ยุ่ง Supabase)
+  const [toast, setToast] = useState<string>("");
 
-  const [annualPoints, setAnnualPoints] = useState(0);
-  const [totalPoints, setTotalPoints] = useState(0);
-  const [rank, setRank] = useState<RankConfig | null>(null);
+  // แสดงอิโมจิหัวใจ ถ้ารูปโหลดไม่ได้
+  const [logoFailed, setLogoFailed] = useState(false);
 
-  // Transfer modal
-  const [showTransferModal, setShowTransferModal] = useState(false);
-  const [transferReceiverId, setTransferReceiverId] = useState("");
-  const [transferAmount, setTransferAmount] = useState("");
-
-  // normalize volunteer code from url param
-  const volunteerCode = useMemo(() => {
-    if (!id) return "";
-    return id.replace(/^v_/, "").trim().toUpperCase();
-  }, [id]);
-
-  // ปีที่ “ไม่คิดคะแนน”
-  const isNoScoreYear = selectedYear >= 2557 && selectedYear <= 2568;
-
-  // rank helper (points OR activityCount)
-const computeRank = (
-  points: number,
-  activityCount: number = 0
-): RankConfig => {
-  if (points > 200 || activityCount > 10) {
-    return {
-      name: "ผู้มีพลังขับเคลื่อนสังคม",
-      icon: "🔥",
-      color: "bg-orange-100 text-orange-600",
-    };
-  }
-  if (points > 100 || activityCount >= 5) {
-    return {
-      name: "นักสร้างสรรค์แบ่งปันโอกาส",
-      icon: "🌳",
-      color: "bg-teal-100 text-teal-600",
-    };
-  }
-  if (points > 50 || activityCount >= 3) {
-    return {
-      name: "เพื่อนชุมชน",
-      icon: "🌿",
-      color: "bg-green-100 text-green-600",
-    };
-  }
-  return {
-    name: "ผู้เริ่มต้นแบ่งปัน",
-    icon: "🌱",
-    color: "bg-lime-100 text-lime-600",
-  };
-};
-
-  const toThaiYearFromDate = (dateLike: string) => {
-    const d = new Date(dateLike);
-    return d.getFullYear() + 543;
-  };
-
-  // รวม/คำนวณแต้มตามกติกา: ปี 2557-2568 = 0
-  const sumPointsWithRule = (txs: Transaction[], year?: number) => {
-    return txs
-      .filter((t) => (year ? t.thaiYear === year : true))
-      .reduce((sum, t) => {
-        if (t.thaiYear >= 2557 && t.thaiYear <= 2568) return sum + 0;
-        return sum + Number(t.amount ?? 0);
-      }, 0);
-  };
-
-  // =========================
-  // LOAD profile from Supabase
-  // =========================
+  // ✅ Debounce (กันยิง Supabase ทุกตัวอักษร) — คง logic เดิม
   useEffect(() => {
-    if (!volunteerCode) {
+    const term = searchTerm.trim();
+
+    if (term.length < 2) {
+      setResult(null);
       setLoading(false);
-      setErrorMsg("Missing volunteer code");
+      setNotFound(false);
+      setErrorMsg(null);
       return;
     }
 
     let cancelled = false;
 
-    const run = async () => {
+    const timer = setTimeout(async () => {
       try {
         setLoading(true);
         setErrorMsg(null);
+        setNotFound(false);
 
-        // 1) โหลด volunteer จาก service เดิม
-        const vRow = await fetchVolunteerByCode(volunteerCode);
+        // ✅ normalize search (กันเคสผู้ใช้พิมพ์เว้นวรรค/ตัวเล็กใหญ่)
+        const normalized = term.replace(/\s+/g, "").toUpperCase();
+
+        const data = await fetchVolunteerByCode(normalized);
 
         if (cancelled) return;
 
-        if (!vRow) {
-          setVolunteer(null);
-          setTransactions([]);
-          setAnnualPoints(0);
-          setTotalPoints(0);
-          setRank(null);
-          setErrorMsg("ไม่พบข้อมูลอาสา/รหัสพนักงานนี้");
+        if (!data) {
+          setResult(null);
+          setNotFound(true);
           return;
         }
 
-        const mappedVolunteer: Volunteer = mapVolunteerRowToVolunteer(vRow);
-        setVolunteer(mappedVolunteer);
+        // ✅ ใช้ helper จาก dataService.ts (กัน schema เปลี่ยน)
+        const mapped = mapVolunteerRowToVolunteer(data);
 
-        // ✅ กันพังกรณี supabaseClient undefined / env ไม่ครบ
-        if (!supabaseClient) {
-          setTransactions([]);
-          setAnnualPoints(0);
-          setTotalPoints(0);
-          setRank(computeRank(0));
-          return;
-        }
-
-        // 2) โหลด “กิจกรรม” จาก activity_history (คิด +20/ครั้ง)
-        const { data: actData, error: actErr } = await supabaseClient
-          .from("activity_history")
-          .select("activity_date, thai_year, status")
-          .eq("volunteer_code", volunteerCode)
-          .order("activity_date", { ascending: false });
-
-        if (actErr) {
-          console.error("Activity load error:", actErr);
-        }
-
-        const activityTx: Transaction[] = (actData ?? []).map((a: any, idx: number) => {
-          const thaiYear =
-            Number(a.thai_year) ||
-            (a.activity_date ? toThaiYearFromDate(a.activity_date) : getCurrentThaiYear());
-
-          return {
-            id: `act_${thaiYear}_${idx}`,
-            volunteerId: mappedVolunteer.id,
-            amount: POINTS_PER_ACTIVITY,
-            type: "ACTIVITY" as any,
-            description: a?.status === "ADMIN" ? "ร่วมกิจกรรมอาสา (ทีมงาน/Admin)" : "ร่วมกิจกรรมอาสา",
-            date: a.activity_date ?? new Date().toISOString(),
-            thaiYear,
-            createdBy: "system",
-          } as Transaction;
-        });
-
-        // 3) โหลด “ประวัติการโอน” จาก view (เหมือนของเดิม)
-        const { data: txData, error: txError } = await supabaseClient
-          .from("point_transactions_view")
-          .select("*")
-          .or(`from_volunteer_id.eq.${vRow.id},to_volunteer_id.eq.${vRow.id}`)
-          .order("created_at", { ascending: false });
-
-        if (txError) {
-          console.error("TX load error:", txError);
-        }
-
-        const transferTx: Transaction[] = (txData ?? []).map((t: any) => {
-          const isOut = t.from_volunteer_id === vRow.id;
-          const amount = Number(t.amount ?? 0);
-          const createdAt = t.created_at ?? new Date().toISOString();
-
-          return {
-            id: t.id,
-            volunteerId: vRow.id,
-            amount: isOut ? -Math.abs(amount) : Math.abs(amount),
-            type: "TRANSFER" as any,
-            description: isOut
-              ? `โอนให้ ${t.to_name ?? t.to_volunteer_code ?? "-"}`
-              : `ได้รับจาก ${t.from_name ?? t.from_volunteer_code ?? "-"}`,
-            date: createdAt,
-            thaiYear: toThaiYearFromDate(createdAt),
-            createdBy: "system",
-          } as Transaction;
-        });
-
-        // 4) รวมรายการทั้งหมด
-        const allTx = [...transferTx, ...activityTx].sort(
-          (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-        );
-
-        setTransactions(allTx);
-
-        // 5) คำนวณแต้มรวม + แต้มปีปัจจุบัน (ตาม rule ปีไม่คิดคะแนน)
-        const total = sumPointsWithRule(allTx);
-        const annual = sumPointsWithRule(allTx, getCurrentThaiYear());
-
-        setTotalPoints(total);
-        setAnnualPoints(annual);
-        setRank(computeRank(annual));
+        setResult(mapped);
+        setNotFound(false);
       } catch (err: any) {
         if (cancelled) return;
-        console.error("Profile load error:", err);
-        setErrorMsg(err?.message ?? "โหลดข้อมูลไม่สำเร็จ");
-        setVolunteer(null);
-        setTransactions([]);
-        setAnnualPoints(0);
-        setTotalPoints(0);
-        setRank(null);
+        console.error("fetchVolunteerByCode error:", err);
+        setResult(null);
+        setNotFound(false);
+        setErrorMsg(err?.message ?? "เกิดข้อผิดพลาดในการค้นหา");
       } finally {
         if (!cancelled) setLoading(false);
       }
-    };
-
-    run();
+    }, 350);
 
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
-  }, [volunteerCode]);
+  }, [searchTerm]);
 
-  // =========================
-  // Recompute Annual points + rank when selectedYear changes
-  // =========================
-  useEffect(() => {
-    if (!transactions || transactions.length === 0) {
-      setAnnualPoints(0);
-      setRank(computeRank(0));
-      return;
-    }
-
-    const year = selectedYear === 0 ? undefined : selectedYear;
-    const pts = year ? sumPointsWithRule(transactions, year) : sumPointsWithRule(transactions, getCurrentThaiYear());
-
-    // ถ้าเลือก "ทั้งหมด" ให้ rank ยึดปีปัจจุบันเหมือนเดิม (ไม่งง)
-    if (selectedYear === 0) {
-      const currentPts = sumPointsWithRule(transactions, getCurrentThaiYear());
-      setAnnualPoints(currentPts);
-      setRank(computeRank(currentPts));
-    } else {
-      setAnnualPoints(pts);
-      setRank(computeRank(pts, transactions.filter(t => t.type === "ACTIVITY").length));
-    }
-  }, [selectedYear, transactions]);
-
-  // =========================
-  // Transfer (ยังไม่ผูก Supabase)
-  // =========================
-  const handleTransferSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!volunteer) return;
-
-    const amount = parseInt(transferAmount, 10);
-    if (Number.isNaN(amount) || amount <= 0) {
-      alert("กรุณาระบุจำนวนแต้มที่ถูกต้อง");
-      return;
-    }
-
-    if (
-      !confirm(
-        `ยืนยันการโอน ${amount} แต้ม ให้รหัส ${transferReceiverId}?\n\n⚠️ เมื่อโอนแล้วจะไม่สามารถเรียกคืนได้!`
-      )
-    ) {
-      return;
-    }
-
-    alert("ตอนนี้ระบบโอนแต้มยังไม่ได้ผูกกับ Supabase — ถ้าต้องการให้โอนได้จริง เดี๋ยวผมทำฟังก์ชันให้ต่อ");
+  const goToProfile = (empId: string) => {
+    // ✅ คงเดิม: route ใหม่ /profile/:id (id = volunteer_code)
+    navigate(`/profile/${empId}`);
   };
 
-  // =========================
-  // UI states
-  // =========================
-  if (loading) {
-    return <div className="p-8 text-center">Loading...</div>;
-  }
+  // ✅ ปุ่มแลกของรางวัล: โฟกัสค้นหา (ไม่ไปยุ่ง flow เดิม)
+  const handleRedeemClick = () => {
+    searchInputRef.current?.focus();
+    searchInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setToast("กรุณาค้นหารหัสพนักงานของคุณก่อน เพื่อเข้าสู่ระบบแลกของรางวัล");
+    window.setTimeout(() => setToast(""), 3500);
+  };
 
-  if (errorMsg) {
-    return (
-      <div className="p-8 text-center space-y-4">
-        <div className="text-gray-700 font-semibold">{errorMsg}</div>
-        <Link to="/" className="inline-flex items-center text-gray-500 hover:text-gray-800">
-          <ArrowLeft size={20} className="mr-1" /> กลับไปหน้าแรก
-        </Link>
-      </div>
-    );
-  }
+  const clearSearch = () => {
+    setSearchTerm("");
+    setResult(null);
+    setLoading(false);
+    setNotFound(false);
+    setErrorMsg(null);
+    searchInputRef.current?.focus();
+  };
 
-  if (!volunteer) {
-    return (
-      <div className="p-8 text-center space-y-4">
-        <div className="text-gray-700 font-semibold">ไม่พบข้อมูล</div>
-        <Link to="/" className="inline-flex items-center text-gray-500 hover:text-gray-800">
-          <ArrowLeft size={20} className="mr-1" /> กลับไปหน้าแรก
-        </Link>
-      </div>
-    );
-  }
-
-  const displayedTransactions =
-    selectedYear === 0 ? transactions : transactions.filter((t) => t.thaiYear === selectedYear);
-
-  const availableYears = Array.from(new Set(transactions.map((t) => t.thaiYear))).sort(
-    (a: number, b: number) => b - a
-  );
-
-  if (!availableYears.includes(getCurrentThaiYear())) {
-    availableYears.unshift(getCurrentThaiYear());
-  }
+  const trimmed = useMemo(() => searchTerm.trim(), [searchTerm]);
 
   return (
-    <div className="space-y-6 relative">
-      {/* Header Profile */}
-      <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 relative overflow-hidden">
-        <div className="absolute top-0 right-0 p-4 opacity-10">
-          <Award size={120} />
-        </div>
+    <div className="relative">
+      {/* soft background */}
+      <div className="absolute inset-0 -z-10 bg-gradient-to-b from-pink-50 via-rose-50/40 to-white" />
 
-        <Link to="/" className="inline-flex items-center text-gray-500 hover:text-gray-800 mb-4">
-          <ArrowLeft size={20} className="mr-1" /> ค้นหาใหม่
-        </Link>
-
-        <div className="relative z-10">
-          <h1 className="text-3xl font-bold text-gray-900 font-mono tracking-wide">
-            {volunteer.empId}
-          </h1>
-
-          <div className="flex flex-wrap items-center gap-3 text-gray-500 mt-2">
-            <span className="text-sm">สังกัด: {volunteer.type}</span>
-          </div>
-
-          <div className="mt-6 flex items-center justify-between">
-            <div>
-              <p className="text-sm text-gray-500 mb-1">ระดับประจำปี {selectedYear}</p>
-              <div
-                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full ${
-                  rank?.color ?? "bg-gray-100 text-gray-700"
-                } font-bold text-sm`}
-              >
-                <span>{rank?.icon ?? "🏷️"}</span>
-                <span>{rank?.name ?? "-"}</span>
-              </div>
-            </div>
-
-            <div className="text-right">
-              <p className="text-sm text-gray-500 mb-1">แต้มสะสมปีนี้</p>
-              <span className={`text-3xl font-bold ${isNoScoreYear ? "text-gray-400" : "text-primary"}`}>
-                {isNoScoreYear ? "ไม่ระบุ" : annualPoints}
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Actions */}
-      <div className="grid grid-cols-2 gap-4">
-        <div className="bg-blue-50 p-4 rounded-xl flex flex-col justify-between border border-blue-100 relative overflow-hidden">
-          <div className="text-center z-10">
-            <span className="text-sm text-blue-600 font-medium mb-1 block">แต้มรวมทั้งหมด</span>
-            <span className="text-2xl font-bold text-blue-800 block">{totalPoints}</span>
-          </div>
-
-          <button
-            onClick={() => setShowTransferModal(true)}
-            className="mt-3 w-full bg-blue-600 text-white text-xs py-2 rounded-lg hover:bg-blue-700 flex items-center justify-center gap-1 shadow-sm transition z-10"
-          >
-            <Send size={12} /> โอนแต้มให้เพื่อน
-          </button>
-        </div>
-
-        <Link
-          to={`/rewards/${volunteer.empId}`}
-          className="bg-secondary p-4 rounded-xl flex flex-col items-center justify-center text-center text-white hover:bg-pink-400 transition shadow-sm"
-        >
-          <Gift className="mb-1" size={24} />
-          <span className="font-bold">แลกรางวัล</span>
-        </Link>
-      </div>
-
-      {/* Year Filter */}
-      <div className="flex items-center justify-between mt-8 mb-4">
-        <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
-          <History size={20} className="text-primary" /> ประวัติกิจกรรม
-        </h2>
-
-        <div className="relative">
-          <select
-            value={selectedYear}
-            onChange={(e) => setSelectedYear(Number(e.target.value))}
-            className="appearance-none bg-white border border-pink-200 text-gray-700 py-1.5 pl-3 pr-8 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm shadow-sm"
-          >
-            <option value={getCurrentThaiYear()}>{getCurrentThaiYear()}</option>
-            <option value={0}>ทั้งหมด</option>
-            {availableYears
-              .filter((y) => y !== getCurrentThaiYear())
-              .map((year) => (
-                <option key={year} value={year}>
-                  {year}
-                </option>
-              ))}
-          </select>
-
-          <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-pink-500">
-            <Calendar size={14} />
-          </div>
-        </div>
-      </div>
-
-      {/* Transaction List */}
-      <div className="space-y-3">
-        {displayedTransactions.length === 0 ? (
-          <div className="text-center py-10 text-gray-400 bg-white rounded-xl border border-dashed border-gray-200">
-            ไม่มีรายการในปี {selectedYear}
-          </div>
-        ) : (
-          displayedTransactions.map((tx) => (
-            <div
-              key={tx.id}
-              className="bg-white p-4 rounded-xl shadow-sm border border-gray-50 flex justify-between items-center hover:shadow-md transition"
-            >
-              <div>
-                <div className="font-bold text-gray-800 text-sm">{tx.description}</div>
-                <div className="text-xs text-gray-400 mt-1">
-                  {new Date(tx.date).toLocaleDateString("th-TH")} • {tx.type}
-                </div>
-              </div>
-
-              <div className={`font-bold text-lg ${tx.amount >= 0 ? "text-green-500" : "text-red-500"}`}>
-                {tx.amount >= 0 ? "+" : ""}
-                {tx.amount}
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-
-      {/* Transfer Modal */}
-      {showTransferModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white rounded-2xl w-full max-w-sm p-6 relative shadow-2xl">
-            <button
-              onClick={() => setShowTransferModal(false)}
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
-            >
-              <X size={24} />
-            </button>
-
-            <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
-              <Send size={20} className="text-blue-600" /> โอนแต้มให้เพื่อน
-            </h3>
-
-            <div className="bg-blue-50 border border-blue-100 p-3 rounded-lg mb-4 text-sm text-blue-800 flex items-start gap-2">
-              <AlertTriangle size={16} className="mt-0.5 flex-shrink-0" />
-              <div>
-                <p className="font-semibold">ข้อควรระวัง</p>
-                <p className="text-xs opacity-80">
-                  ตอนนี้ยังไม่ได้ผูก “โอนแต้ม” กับ Supabase — ถ้าต้องการให้โอนได้จริง เดี๋ยวผมทำให้ต่อ
-                </p>
-              </div>
-            </div>
-
-            <form onSubmit={handleTransferSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  รหัสพนักงานเพื่อน (ผู้รับ)
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    required
-                    placeholder="ระบุรหัสพนักงาน"
-                    className="w-full pl-10 p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                    value={transferReceiverId}
-                    onChange={(e) => setTransferReceiverId(e.target.value)}
-                  />
-                  <User className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">จำนวนแต้มที่โอน</label>
-                <input
-                  type="number"
-                  required
-                  min="1"
-                  max={Math.max(totalPoints, 1)}
-                  placeholder={`สูงสุด ${totalPoints}`}
-                  className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none font-bold text-lg"
-                  value={transferAmount}
-                  onChange={(e) => setTransferAmount(e.target.value)}
-                />
-              </div>
-
-              <button
-                type="submit"
-                className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-200 transition"
-              >
-                ยืนยันการโอน
-              </button>
-            </form>
+      {/* toast */}
+      {toast && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50">
+          <div className="bg-white/95 backdrop-blur border border-pink-100 shadow-lg rounded-full px-4 py-2 text-sm text-gray-700 flex items-center gap-2">
+            <span className="text-pink-500">💗</span>
+            <span className="font-medium">{toast}</span>
           </div>
         </div>
       )}
+
+      <div className="flex flex-col items-center justify-center min-h-[75vh] space-y-10 pb-10 px-4">
+        {/* Header */}
+        <div className="text-center space-y-4 flex flex-col items-center">
+          <div className="relative">
+            <div className="inline-flex items-center justify-center bg-white rounded-[28px] shadow-xl border border-pink-50 min-w-[120px] min-h-[120px] px-6">
+              {/* ถ้ามีโลโก้ให้โชว์โลโก้ แต่ถ้าไม่มีก็โชว์หัวใจ */}
+              {!logoFailed ? (
+                <img
+                  src="/logo.png"
+                  alt="Logo"
+                  className="h-24 w-auto object-contain"
+                  onError={() => setLogoFailed(true)}
+                />
+              ) : (
+                <div className="text-[64px] leading-none">💗</div>
+              )}
+            </div>
+
+            {/* small glow */}
+            <div className="absolute -inset-6 -z-10 bg-pink-200/20 blur-2xl rounded-full" />
+          </div>
+
+          <h1 className="text-5xl md:text-6xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-pink-500 to-rose-400 drop-shadow-sm">
+            อาสาชีวิต
+            <br className="md:hidden" />
+            หมุนต่อได้
+          </h1>
+
+          <p className="text-base md:text-lg text-gray-500 font-medium max-w-lg mx-auto">
+            แพลตฟอร์มสะสมความดี แลกรับความสุขของชาวอาสา
+          </p>
+        </div>
+
+        {/* Search Box */}
+        <div className="w-full max-w-md relative z-20">
+          <div className="relative group">
+            <input
+              ref={searchInputRef}
+              type="text"
+              placeholder="ค้นหารหัสพนักงาน..."
+              className="w-full pl-14 pr-12 py-5 rounded-full border-2 border-pink-100 bg-white/90 backdrop-blur focus:bg-white focus:border-pink-500 focus:ring-4 focus:ring-pink-100 shadow-lg text-lg outline-none transition"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              inputMode="text"
+              autoCapitalize="characters"
+              autoCorrect="off"
+            />
+
+            <div className="absolute left-5 top-1/2 -translate-y-1/2">
+              <div className="w-10 h-10 rounded-full bg-pink-50 flex items-center justify-center border border-pink-100">
+                <Search className="text-pink-400" size={20} />
+              </div>
+            </div>
+
+            {/* Right icon (loading / clear) */}
+            <div className="absolute right-4 top-1/2 -translate-y-1/2">
+              {loading ? (
+                <Loader2 className="animate-spin text-pink-400" size={22} />
+              ) : trimmed.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={clearSearch}
+                  className="w-9 h-9 rounded-full border border-gray-200 bg-white hover:bg-gray-50 text-gray-500 flex items-center justify-center transition"
+                  aria-label="Clear search"
+                >
+                  ✕
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          {/* Result dropdown */}
+          {result && (
+            <div className="absolute top-full left-0 right-0 mt-3 bg-white rounded-2xl shadow-xl border border-pink-100 overflow-hidden z-30">
+              <button
+                onClick={() => goToProfile(result.empId)}
+                className="w-full px-5 py-4 text-left hover:bg-pink-50 flex items-center gap-4 transition"
+              >
+                <div className="bg-pink-100 p-3 rounded-full text-pink-500">
+                  <User size={24} />
+                </div>
+                <div className="min-w-0">
+                  <div className="font-bold text-gray-800 text-lg font-mono truncate">
+                    รหัส: {result.empId}
+                  </div>
+                  <div className="text-sm text-gray-500 truncate">สังกัด: {result.type}</div>
+                </div>
+
+                <div className="ml-auto text-xs font-bold text-pink-600 bg-pink-50 border border-pink-100 px-3 py-1 rounded-full">
+                  ดูโปรไฟล์
+                </div>
+              </button>
+            </div>
+          )}
+
+          {/* Messages */}
+          {errorMsg && (
+            <div className="text-center mt-4 text-red-600 bg-white/70 py-2 rounded-xl border border-red-100">
+              {errorMsg}
+            </div>
+          )}
+
+          {!errorMsg && notFound && trimmed.length >= 2 && (
+            <div className="text-center mt-4 text-gray-500 bg-white/70 py-2 rounded-xl border border-gray-100">
+              ไม่พบรหัสพนักงาน
+            </div>
+          )}
+
+          {/* Helper hint */}
+          <div className="text-center mt-3 text-xs text-gray-400">
+            * ระบบจะค้นหาให้อัตโนมัติ
+          </div>
+        </div>
+
+        {/* Action buttons */}
+        <div className="grid grid-cols-2 gap-6 w-full max-w-lg mt-2">
+          <button
+            onClick={handleRedeemClick}
+            className="bg-white/90 backdrop-blur p-6 rounded-3xl shadow-md hover:shadow-xl transition flex flex-col items-center border border-pink-50 active:scale-[0.99]"
+          >
+            <div className="w-12 h-12 rounded-2xl bg-pink-50 border border-pink-100 flex items-center justify-center mb-3">
+              <Gift className="text-pink-500 w-7 h-7" />
+            </div>
+            <h3 className="font-extrabold text-gray-800">แลกของรางวัล</h3>
+            <p className="text-xs text-gray-500 mt-1">ค้นหารหัสก่อนเพื่อเข้าใช้งาน</p>
+          </button>
+
+          <button
+            onClick={() => navigate("/leaderboard")}
+            className="bg-white/90 backdrop-blur p-6 rounded-3xl shadow-md hover:shadow-xl transition flex flex-col items-center border border-pink-50 active:scale-[0.99]"
+          >
+            <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-100 flex items-center justify-center mb-3">
+              <Trophy className="text-yellow-600 w-7 h-7" />
+            </div>
+            <h3 className="font-extrabold text-gray-800">เช็กระดับอาสา</h3>
+            <p className="text-xs text-gray-500 mt-1">ดูอันดับและระดับประจำปี</p>
+          </button>
+        </div>
+      </div>
     </div>
   );
 };
