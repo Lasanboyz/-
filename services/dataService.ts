@@ -319,4 +319,95 @@ export async function fetchLeaderboardSummary(mode: LeaderboardMode, thaiYear: n
 
   return Array.from(map.values());
 }
+// ===============================
+// Leaderboard (compute from activity_history directly)
+// ===============================
+export async function fetchLeaderboardSummary(mode: LeaderboardMode, thaiYear: number) {
+  // thaiYear: 0 = all years
+
+  let q = supabase
+    .from("activity_history")
+    .select("volunteer_code, name, branch, status, activity_date, thai_year")
+    .limit(5000);
+
+  // ✅ mode filter (กันเคส status เพี้ยน/มีเว้นวรรค/ตัวเล็กตัวใหญ่)
+  if (mode === "ADMIN") {
+    q = q.or("status.eq.ADMIN,status.ilike.%ADMIN%");
+  } else {
+    // ✅ อาสา = status ว่าง หรือไม่ใช่ admin
+    q = q.or("status.is.null,status.not.ilike.%ADMIN%");
+  }
+
+  const { data, error } = await q;
+
+  if (error) {
+    console.error("[Supabase] fetchLeaderboardSummary error:", error);
+    return [];
+  }
+
+  const rows = (data ?? []) as any[];
+
+  const toThaiYearFromDate = (dateLike: string) => {
+    const d = new Date(dateLike);
+    return d.getFullYear() + 543;
+  };
+
+  const map = new Map<
+    string,
+    {
+      volunteer_code: string;
+      name: string;
+      branch: string;
+      activity_count: number;
+      points: number;
+      thai_year?: number;
+      is_staff?: boolean;
+    }
+  >();
+
+  for (const r of rows) {
+    const code = (r.volunteer_code ?? "").trim();
+    if (!code) continue;
+
+    const rowThaiYear =
+      typeof r.thai_year === "number"
+        ? r.thai_year
+        : r.thai_year
+        ? Number(r.thai_year)
+        : r.activity_date
+        ? toThaiYearFromDate(r.activity_date)
+        : undefined;
+
+    // ✅ filter year in JS (กันเคส thai_year null)
+    if (thaiYear && thaiYear !== 0) {
+      if (!rowThaiYear || rowThaiYear !== thaiYear) continue;
+    }
+
+    const prev =
+      map.get(code) ??
+      ({
+        volunteer_code: code,
+        name: r.name ?? "",
+        branch: r.branch ?? "",
+        activity_count: 0,
+        points: 0,
+        thai_year: thaiYear !== 0 ? thaiYear : undefined,
+        is_staff: mode === "ADMIN",
+      } as any);
+
+    prev.activity_count += 1;
+
+    // rule: 2557-2568 = 0 คะแนน
+    const y = rowThaiYear ?? thaiYear;
+    const noScore = typeof y === "number" && y >= 2557 && y <= 2568;
+    prev.points += noScore ? 0 : 20;
+
+    if (!prev.name && r.name) prev.name = r.name;
+    if (!prev.branch && r.branch) prev.branch = r.branch;
+
+    map.set(code, prev);
+  }
+
+  return Array.from(map.values());
+}
 
