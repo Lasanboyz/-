@@ -24,11 +24,9 @@ import type { Volunteer, Transaction, RankConfig } from "../types";
 
 const POINTS_PER_ACTIVITY = 20;
 
-type TxRow = any;
-type ActivityRow = any;
+type TxViewRow = any; // point_transactions_view row
 
 export const Profile: React.FC = () => {
-  // route: /profile/:id  (id = volunteer_code)
   const { id } = useParams<{ id: string }>();
 
   const [loading, setLoading] = useState(true);
@@ -42,56 +40,31 @@ export const Profile: React.FC = () => {
   const [totalPoints, setTotalPoints] = useState(0);
   const [rank, setRank] = useState<RankConfig | null>(null);
 
-  // Transfer modal
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferReceiverId, setTransferReceiverId] = useState("");
   const [transferAmount, setTransferAmount] = useState("");
   const [transferSubmitting, setTransferSubmitting] = useState(false);
 
-  // ใช้ trigger reload หลังโอนสำเร็จ
   const [reloadTick, setReloadTick] = useState(0);
 
-  // normalize volunteer code from url param
   const volunteerCode = useMemo(() => {
     if (!id) return "";
     return id.replace(/^v_/, "").trim().toUpperCase();
   }, [id]);
 
-  // ปีที่ “ไม่คิดคะแนน”
   const isNoScoreYear = selectedYear >= 2557 && selectedYear <= 2568;
 
-  // rank helper (points OR activityCount)
   const computeRank = (points: number, activityCount: number = 0): RankConfig => {
     if (points > 200 || activityCount > 10) {
-      return {
-        name: "ผู้มีพลังขับเคลื่อนสังคม",
-        minPoints: 201,
-        icon: "🔥",
-        color: "bg-orange-100 text-orange-600",
-      };
+      return { name: "ผู้มีพลังขับเคลื่อนสังคม", minPoints: 201, icon: "🔥", color: "bg-orange-100 text-orange-600" };
     }
     if (points > 100 || activityCount >= 5) {
-      return {
-        name: "นักสร้างสรรค์แบ่งปันโอกาส",
-        minPoints: 101,
-        icon: "🌳",
-        color: "bg-teal-100 text-teal-600",
-      };
+      return { name: "นักสร้างสรรค์แบ่งปันโอกาส", minPoints: 101, icon: "🌳", color: "bg-teal-100 text-teal-600" };
     }
     if (points > 50 || activityCount >= 3) {
-      return {
-        name: "เพื่อนชุมชน",
-        minPoints: 51,
-        icon: "🌿",
-        color: "bg-green-100 text-green-600",
-      };
+      return { name: "เพื่อนชุมชน", minPoints: 51, icon: "🌿", color: "bg-green-100 text-green-600" };
     }
-    return {
-      name: "ผู้เริ่มต้นแบ่งปัน",
-      minPoints: 0,
-      icon: "🌱",
-      color: "bg-lime-100 text-lime-600",
-    };
+    return { name: "ผู้เริ่มต้นแบ่งปัน", minPoints: 0, icon: "🌱", color: "bg-lime-100 text-lime-600" };
   };
 
   const toThaiYearFromDate = (dateLike: string) => {
@@ -99,12 +72,11 @@ export const Profile: React.FC = () => {
     return d.getFullYear() + 543;
   };
 
-  // รวม/คำนวณแต้มตามกติกา: ปี 2557-2568 = 0
   const sumPointsWithRule = (txs: Transaction[], year?: number) => {
     return txs
       .filter((t) => (year ? t.thaiYear === year : true))
       .reduce((sum, t) => {
-        if (t.thaiYear >= 2557 && t.thaiYear <= 2568) return sum + 0;
+        if (t.thaiYear >= 2557 && t.thaiYear <= 2568) return sum;
         return sum + Number(t.amount ?? 0);
       }, 0);
   };
@@ -113,69 +85,55 @@ export const Profile: React.FC = () => {
     return txs.filter((t) => t.type === "ACTIVITY" && t.thaiYear === year).length;
   };
 
-  /**
-   * ✅ แก้บั๊ก “กดหักแล้วแต้มเพิ่ม”:
-   * - DB เก็บ amount เป็นบวกเสมอ (constraint amount > 0)
-   * - admin deduct จะมี from_volunteer_id = null และ to_volunteer_id = user
-   * - ดังนั้นต้องตัดสิน +/− จาก field type ด้วย (deduct = -)
-   */
-  const mapPointTxRowToTransaction = (t: TxRow, volunteerId: string): Transaction => {
-    const typeRaw = String(t?.type ?? "").toLowerCase();
-    const rawAmount = Number(t?.amount ?? 0);
-    const createdAt = t?.created_at ?? new Date().toISOString();
+  // ✅ map point_transactions_view -> Transaction (handle transfer/deduct/adjustment)
+  const mapTxViewToTransaction = (t: TxViewRow, myVolunteerId: string): Transaction => {
+    const txType = String(t.type ?? "transfer").toLowerCase(); // transfer | deduct | adjustment
+    const amountAbs = Math.abs(Number(t.amount ?? 0));
+    const createdAt = t.created_at ?? new Date().toISOString();
+    const thaiYear = toThaiYearFromDate(createdAt);
 
-    let signedAmount = Math.abs(rawAmount);
+    const fromId = t.from_volunteer_id ?? null;
+    const toId = t.to_volunteer_id ?? null;
+    const isOut = fromId && String(fromId) === String(myVolunteerId);
 
-    if (typeRaw === "deduct") {
-      signedAmount = -Math.abs(rawAmount);
-    } else if (typeRaw === "transfer") {
-      // transfer: ใช้ from/to ตัดสินทิศทาง
-      const isOut = String(t?.from_volunteer_id ?? "") === String(volunteerId);
-      signedAmount = isOut ? -Math.abs(rawAmount) : Math.abs(rawAmount);
-    } else if (typeRaw === "adjustment") {
-      // adjustment: ถือเป็นบวก
-      signedAmount = Math.abs(rawAmount);
-    } else {
-      // fallback: ถ้าเจอ type อื่น ๆ ให้เป็นบวกไว้ก่อน
-      signedAmount = Math.abs(rawAmount);
+    // sign rules:
+    // - transfer: out = -, in = +
+    // - deduct: always - for the receiver (to)
+    // - adjustment: always + for the receiver (to)
+    let signedAmount = amountAbs;
+    if (txType === "transfer") {
+      signedAmount = isOut ? -amountAbs : +amountAbs;
+    } else if (txType === "deduct") {
+      signedAmount = -amountAbs;
+    } else if (txType === "adjustment") {
+      signedAmount = +amountAbs;
     }
 
     // description
-    const isOutTransfer = typeRaw === "transfer" && String(t?.from_volunteer_id ?? "") === String(volunteerId);
-
-    let description = t?.note ?? "-";
-    if (typeRaw === "transfer") {
-      description = isOutTransfer
-        ? `โอนให้ ${t?.to_name ?? t?.to_volunteer_code ?? "-"}`
-        : `ได้รับจาก ${t?.from_name ?? t?.from_volunteer_code ?? "-"}`;
-    } else if (typeRaw === "deduct") {
-      description = t?.note ? `หักแต้ม • ${t.note}` : "หักแต้ม";
-    } else if (typeRaw === "adjustment") {
-      description = t?.note ? `ปรับแต้ม • ${t.note}` : "ปรับแต้ม";
+    let desc = t.note ?? "-";
+    if (txType === "transfer") {
+      desc = isOut
+        ? `โอนให้ ${t.to_name ?? t.to_volunteer_code ?? "-"}`
+        : `ได้รับจาก ${t.from_name ?? t.from_volunteer_code ?? "-"}`;
+    } else if (txType === "deduct") {
+      desc = `หักแต้ม • ${t.note ?? "admin deduct"}`;
+    } else if (txType === "adjustment") {
+      desc = `ปรับแต้ม • ${t.note ?? "admin give"}`;
     }
 
-    // เก็บ relatedId (ไว้เผื่อใช้ต่อ)
-    const relatedId =
-      typeRaw === "transfer"
-        ? (isOutTransfer ? t?.to_volunteer_id : t?.from_volunteer_id)
-        : null;
-
     return {
-      id: t?.id,
-      volunteerId,
+      id: t.id,
+      volunteerId: myVolunteerId,
       amount: signedAmount,
-      type: "TRANSFER", // ใช้ enum เดิมของคุณ (รวมทั้ง transfer/adjust/deduct อยู่ใน view ชุดเดียว)
-      description,
+      type: txType.toUpperCase(), // "TRANSFER" | "DEDUCT" | "ADJUSTMENT"
+      description: desc,
       date: createdAt,
-      thaiYear: toThaiYearFromDate(createdAt),
+      thaiYear,
       createdBy: "system",
-      relatedId: relatedId ?? undefined,
-    };
+      relatedId: isOut ? toId : fromId,
+    } as any;
   };
 
-  // =========================
-  // LOAD profile from Supabase
-  // =========================
   useEffect(() => {
     if (!volunteerCode) {
       setLoading(false);
@@ -190,7 +148,6 @@ export const Profile: React.FC = () => {
         setLoading(true);
         setErrorMsg(null);
 
-        // 1) โหลด volunteer
         const vRow = await fetchVolunteerByCode(volunteerCode);
         if (cancelled) return;
 
@@ -215,20 +172,18 @@ export const Profile: React.FC = () => {
           return;
         }
 
-        // 2) โหลด “กิจกรรม” จาก activity_history (คิด +20/ครั้ง)
-        const { data: actData, error: actErr } = await supabaseClient
+        // 1) activity_history -> +20/ครั้ง
+        const { data: actData } = await supabaseClient
           .from("activity_history")
           .select("activity_date, thai_year, status")
           .eq("volunteer_code", volunteerCode)
           .eq("is_void", false)
           .order("activity_date", { ascending: false });
 
-        if (actErr) console.error("Activity load error:", actErr);
-
-        const activityTx: Transaction[] = (actData ?? []).map((a: ActivityRow, idx: number) => {
+        const activityTx: Transaction[] = (actData ?? []).map((a: any, idx: number) => {
           const thaiYear =
-            Number(a?.thai_year) ||
-            (a?.activity_date ? toThaiYearFromDate(a.activity_date) : getCurrentThaiYear());
+            Number(a.thai_year) ||
+            (a.activity_date ? toThaiYearFromDate(a.activity_date) : getCurrentThaiYear());
 
           return {
             id: `act_${thaiYear}_${idx}`,
@@ -239,13 +194,13 @@ export const Profile: React.FC = () => {
               String(a?.status ?? "").toUpperCase() === "ADMIN"
                 ? "ร่วมกิจกรรมอาสา (ทีมงาน/Admin)"
                 : "ร่วมกิจกรรมอาสา",
-            date: a?.activity_date ?? new Date().toISOString(),
+            date: a.activity_date ?? new Date().toISOString(),
             thaiYear,
             createdBy: "system",
           };
         });
 
-        // 3) โหลด “ประวัติแต้ม” จาก view (รวม transfer/adjustment/deduct)
+        // 2) point_transactions_view -> TRANSFER/DEDUCT/ADJUSTMENT
         const { data: txData, error: txError } = await supabaseClient
           .from("point_transactions_view")
           .select("*")
@@ -254,27 +209,23 @@ export const Profile: React.FC = () => {
 
         if (txError) console.error("TX load error:", txError);
 
-        const pointTx: Transaction[] = (txData ?? []).map((t: TxRow) =>
-          mapPointTxRowToTransaction(t, vRow.id)
+        const pointTx: Transaction[] = (txData ?? []).map((t: any) =>
+          mapTxViewToTransaction(t, vRow.id)
         );
 
-        // 4) รวมรายการทั้งหมด
         const allTx = [...pointTx, ...activityTx].sort(
           (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
         );
 
         setTransactions(allTx);
 
-        // 5) คำนวณแต้มรวม + แต้มปีปัจจุบัน (ตาม rule ปีไม่คิดคะแนน)
-        const currentYear = getCurrentThaiYear();
-        const total = sumPointsWithRule(allTx);
-        const annual = sumPointsWithRule(allTx, currentYear);
-
-        // ✅ totalPoints ยึด DB เป็นหลัก
+        // ✅ totalPoints ยึด DB points เป็นหลัก
         const latest = await fetchVolunteerPointsByCode(volunteerCode);
-        const totalFromDb = Number(latest?.points ?? total);
-
+        const totalFromDb = Number(latest?.points ?? 0);
         setTotalPoints(totalFromDb);
+
+        const currentYear = getCurrentThaiYear();
+        const annual = sumPointsWithRule(allTx, currentYear);
         setAnnualPoints(annual);
 
         const activityCountThisYear = countActivities(allTx, currentYear);
@@ -294,15 +245,9 @@ export const Profile: React.FC = () => {
     };
 
     run();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [volunteerCode, reloadTick]);
 
-  // =========================
-  // Recompute Annual points + rank when selectedYear changes
-  // =========================
   useEffect(() => {
     if (!transactions || transactions.length === 0) {
       setAnnualPoints(0);
@@ -320,9 +265,6 @@ export const Profile: React.FC = () => {
     setRank(computeRank(pts, activityCount));
   }, [selectedYear, transactions]);
 
-  // =========================
-  // Transfer (ผูก Supabase แล้ว ✅)
-  // =========================
   const handleTransferSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!volunteer) return;
@@ -330,36 +272,15 @@ export const Profile: React.FC = () => {
     const toCode = String(transferReceiverId ?? "").trim().toUpperCase();
     const amount = Number(transferAmount ?? 0);
 
-    if (!toCode) {
-      alert("กรุณาระบุรหัสพนักงานผู้รับ");
-      return;
-    }
-    if (toCode === String(volunteer.empId).trim().toUpperCase()) {
-      alert("ห้ามโอนให้ตัวเอง");
-      return;
-    }
-    if (!Number.isFinite(amount) || amount <= 0) {
-      alert("กรุณาระบุจำนวนแต้มที่ถูกต้อง");
-      return;
-    }
-    if (amount > Math.max(totalPoints, 0)) {
-      alert(`แต้มไม่พอ (โอนได้สูงสุด ${totalPoints})`);
-      return;
-    }
+    if (!toCode) return alert("กรุณาระบุรหัสพนักงานผู้รับ");
+    if (toCode === String(volunteer.empId).trim().toUpperCase()) return alert("ห้ามโอนให้ตัวเอง");
+    if (!Number.isFinite(amount) || amount <= 0) return alert("กรุณาระบุจำนวนแต้มที่ถูกต้อง");
+    if (amount > Math.max(totalPoints, 0)) return alert(`แต้มไม่พอ (โอนได้สูงสุด ${totalPoints})`);
 
-    // เช็กผู้รับว่ามีจริง
     const receiverRow = await fetchVolunteerByCode(toCode);
-    if (!receiverRow) {
-      alert("ไม่พบรหัสผู้รับในระบบ");
-      return;
-    }
+    if (!receiverRow) return alert("ไม่พบรหัสผู้รับในระบบ");
 
-    if (
-      !confirm(
-        `ยืนยันการโอน ${amount} แต้ม ให้รหัส ${toCode}?\n\n⚠️ เมื่อโอนแล้วจะไม่สามารถเรียกคืนได้!`
-      )
-    )
-      return;
+    if (!confirm(`ยืนยันการโอน ${amount} แต้ม ให้รหัส ${toCode}?\n\n⚠️ เมื่อโอนแล้วจะไม่สามารถเรียกคืนได้!`)) return;
 
     try {
       setTransferSubmitting(true);
@@ -374,7 +295,6 @@ export const Profile: React.FC = () => {
       setShowTransferModal(false);
       setTransferReceiverId("");
       setTransferAmount("");
-
       setReloadTick((x) => x + 1);
 
       alert("โอนแต้มสำเร็จ ✅");
@@ -386,12 +306,7 @@ export const Profile: React.FC = () => {
     }
   };
 
-  // =========================
-  // UI states
-  // =========================
-  if (loading) {
-    return <div className="p-8 text-center">Loading...</div>;
-  }
+  if (loading) return <div className="p-8 text-center">Loading...</div>;
 
   if (errorMsg) {
     return (
@@ -428,7 +343,6 @@ export const Profile: React.FC = () => {
 
   return (
     <div className="space-y-6 relative">
-      {/* Header Profile */}
       <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 relative overflow-hidden">
         <div className="absolute top-0 right-0 p-4 opacity-10">
           <Award size={120} />
@@ -462,9 +376,7 @@ export const Profile: React.FC = () => {
 
             <div className="text-right">
               <p className="text-sm text-gray-500 mb-1">แต้มสะสมปีนี้</p>
-              <span
-                className={`text-3xl font-bold ${isNoScoreYear ? "text-gray-400" : "text-primary"}`}
-              >
+              <span className={`text-3xl font-bold ${isNoScoreYear ? "text-gray-400" : "text-primary"}`}>
                 {isNoScoreYear ? "ไม่ระบุ" : annualPoints}
               </span>
             </div>
@@ -472,7 +384,6 @@ export const Profile: React.FC = () => {
         </div>
       </div>
 
-      {/* Actions */}
       <div className="grid grid-cols-2 gap-4">
         <div className="bg-blue-50 p-4 rounded-xl flex flex-col justify-between border border-blue-100 relative overflow-hidden">
           <div className="text-center z-10">
@@ -497,7 +408,6 @@ export const Profile: React.FC = () => {
         </Link>
       </div>
 
-      {/* Year Filter */}
       <div className="flex items-center justify-between mt-8 mb-4">
         <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
           <History size={20} className="text-primary" /> ประวัติกิจกรรม
@@ -526,14 +436,13 @@ export const Profile: React.FC = () => {
         </div>
       </div>
 
-      {/* Transaction List */}
       <div className="space-y-3">
         {displayedTransactions.length === 0 ? (
           <div className="text-center py-10 text-gray-400 bg-white rounded-xl border border-dashed border-gray-200">
             ไม่มีรายการในปี {selectedYear}
           </div>
         ) : (
-          displayedTransactions.map((tx) => (
+          displayedTransactions.map((tx: any) => (
             <div
               key={tx.id}
               className="bg-white p-4 rounded-xl shadow-sm border border-gray-50 flex justify-between items-center hover:shadow-md transition"
@@ -545,11 +454,7 @@ export const Profile: React.FC = () => {
                 </div>
               </div>
 
-              <div
-                className={`font-bold text-lg ${
-                  tx.amount >= 0 ? "text-green-500" : "text-red-500"
-                }`}
-              >
+              <div className={`font-bold text-lg ${tx.amount >= 0 ? "text-green-500" : "text-red-500"}`}>
                 {tx.amount >= 0 ? "+" : ""}
                 {tx.amount}
               </div>
@@ -558,7 +463,6 @@ export const Profile: React.FC = () => {
         )}
       </div>
 
-      {/* Transfer Modal */}
       {showTransferModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-fade-in">
           <div className="bg-white rounded-2xl w-full max-w-sm p-6 relative shadow-2xl">
@@ -599,10 +503,7 @@ export const Profile: React.FC = () => {
                     onChange={(e) => setTransferReceiverId(e.target.value)}
                     disabled={transferSubmitting}
                   />
-                  <User
-                    className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-                    size={18}
-                  />
+                  <User className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                 </div>
               </div>
 
@@ -625,9 +526,7 @@ export const Profile: React.FC = () => {
                 type="submit"
                 disabled={transferSubmitting}
                 className={`w-full font-bold py-3 rounded-xl shadow-lg transition ${
-                  transferSubmitting
-                    ? "bg-gray-300 text-gray-600"
-                    : "bg-blue-600 text-white hover:bg-blue-700 shadow-blue-200"
+                  transferSubmitting ? "bg-gray-300 text-gray-600" : "bg-blue-600 text-white hover:bg-blue-700 shadow-blue-200"
                 }`}
               >
                 {transferSubmitting ? "กำลังโอน..." : "ยืนยันการโอน"}
