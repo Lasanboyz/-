@@ -7,8 +7,10 @@ import {
   MinusCircle,
   History,
   RefreshCcw,
-  CalendarPlus,
+  UserPlus,
 } from "lucide-react";
+
+import type { Volunteer } from "../types";
 
 import {
   fetchVolunteerByCode,
@@ -17,45 +19,41 @@ import {
   adminGivePoints,
   adminDeductPoints,
   adminFetchPointHistory,
-  // ✅ เพิ่มอันนี้ (ต้องมีอยู่ใน dataService.ts แล้ว)
-  addActivityOnce,
+  createVolunteer, // ✅ ต้องมีใน dataService.ts
 } from "../services/dataService";
-
-import type { Volunteer } from "../types";
 
 type TxRow = any;
 
 export const Admin: React.FC = () => {
   const navigate = useNavigate();
 
+  // ===== Auth (simple passcode) =====
   const [passcode, setPasscode] = useState("");
   const [unlocked, setUnlocked] = useState(false);
+  const ADMIN_PASS = import.meta.env.VITE_ADMIN_PASSCODE || "NTL-Volunteer-2569";
 
-  // Search
+  // ===== Search =====
   const [searchCode, setSearchCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
-  // Selected volunteer
+  // ===== Selected volunteer =====
   const [v, setV] = useState<Volunteer | null>(null);
   const [points, setPoints] = useState<number>(0);
 
-  // Adjust points
+  // ===== Adjust points =====
   const [amount, setAmount] = useState<string>("");
   const [note, setNote] = useState<string>("");
 
-  // History (point_transactions)
+  // ===== History =====
   const [history, setHistory] = useState<TxRow[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
-  // ✅ Activity (activity_history)
-  const [activityDate, setActivityDate] = useState<string>(
-    new Date().toISOString().slice(0, 10) // YYYY-MM-DD
-  );
-  const [activityStatus, setActivityStatus] = useState<"VOLUNTEER" | "ADMIN">("VOLUNTEER");
-  const [savingActivity, setSavingActivity] = useState(false);
-
-  const ADMIN_PASS = import.meta.env.VITE_ADMIN_PASSCODE || "NTL-Volunteer-2569";
+  // ===== Create volunteer (when not found) =====
+  const [showCreate, setShowCreate] = useState(false);
+  const [newCode, setNewCode] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newBranch, setNewBranch] = useState<"HO" | "BRANCH">("BRANCH");
 
   const canSubmit = useMemo(() => {
     const n = Number(amount);
@@ -63,8 +61,21 @@ export const Admin: React.FC = () => {
   }, [v, amount]);
 
   const doUnlock = () => {
+    setMsg(null);
     if (passcode.trim() === ADMIN_PASS) setUnlocked(true);
     else setMsg("Passcode ไม่ถูกต้อง");
+  };
+
+  const resetUI = () => {
+    setV(null);
+    setPoints(0);
+    setHistory([]);
+    setAmount("");
+    setNote("");
+    setShowCreate(false);
+    setNewCode("");
+    setNewName("");
+    setNewBranch("BRANCH");
   };
 
   const refreshPointsAndHistory = async (volunteerId: string, volunteerCode: string) => {
@@ -84,29 +95,80 @@ export const Admin: React.FC = () => {
 
   const handleSearch = async () => {
     const code = searchCode.trim().toUpperCase();
-    if (!code) return;
+    if (!code) {
+      setMsg("กรุณากรอกรหัสก่อนค้นหา");
+      return;
+    }
 
     setLoading(true);
     setMsg(null);
-    setV(null);
-    setPoints(0);
-    setHistory([]);
+    resetUI();
 
     try {
       const row = await fetchVolunteerByCode(code);
+
       if (!row) {
-        setMsg("ไม่พบรหัสนี้ในตาราง volunteers");
+        // ✅ ไม่พบ -> เปิดฟอร์มสร้างใหม่ทันที
+        setMsg(`ไม่พบรหัส "${code}" ในตาราง volunteers — สามารถเพิ่มอาสาใหม่ได้ด้านล่าง`);
+        setShowCreate(true);
+        setNewCode(code); // auto fill จากที่ค้นหา
         return;
       }
 
       const mapped = mapVolunteerRowToVolunteer(row);
       setV(mapped);
 
-      // load points + history
       await refreshPointsAndHistory(row.id, code);
+      setMsg(null);
     } catch (e: any) {
-      console.error(e);
-      setMsg(e?.message ?? "ค้นหาไม่สำเร็จ");
+      console.error("[Admin] search error:", e);
+      setMsg(e?.message ?? "ค้นหาไม่สำเร็จ (เช็ก Console เพิ่มเติม)");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateVolunteer = async () => {
+    const code = newCode.trim().toUpperCase();
+    const name = newName.trim();
+    const branch = newBranch === "HO" ? "HO" : "BRANCH";
+
+    if (!code) {
+      setMsg("กรุณากรอกรหัสอาสา");
+      return;
+    }
+    if (!name) {
+      setMsg("กรุณากรอกชื่อ-นามสกุล");
+      return;
+    }
+
+    setLoading(true);
+    setMsg(null);
+
+    try {
+      const created = await createVolunteer({
+        volunteerCode: code,
+        name,
+        branch,
+        isStaff: false,
+      });
+
+      // โหลดใหม่เหมือนค้นหาเจอ
+      const row = await fetchVolunteerByCode(code);
+      if (!row) throw new Error("สร้างแล้วแต่ค้นหาไม่เจอ (เช็ก RLS/insert result)");
+
+      const mapped = mapVolunteerRowToVolunteer(row);
+      setV(mapped);
+      setShowCreate(false);
+
+      await refreshPointsAndHistory(row.id, code);
+
+      setMsg("เพิ่มอาสาใหม่สำเร็จ ✅");
+      setNewName("");
+      setNewBranch("BRANCH");
+    } catch (e: any) {
+      console.error("[Admin] createVolunteer error:", e);
+      setMsg(e?.message ?? "เพิ่มอาสาใหม่ไม่สำเร็จ");
     } finally {
       setLoading(false);
     }
@@ -168,50 +230,7 @@ export const Admin: React.FC = () => {
     }
   };
 
-  // ✅ เพิ่ม “กิจกรรม +1 ครั้ง” (บันทึกลง activity_history)
-  const handleAddActivity = async () => {
-    if (!v) {
-      setMsg("กรุณาค้นหาและเลือกพนักงานก่อน");
-      return;
-    }
-
-    if (!activityDate) {
-      setMsg("กรุณาเลือกวันที่ทำกิจกรรม");
-      return;
-    }
-
-    const confirmText =
-      activityStatus === "ADMIN"
-        ? `ยืนยันบันทึก “กิจกรรม (ทีมงาน/Admin)” 1 ครั้ง ให้ ${v.empId} วันที่ ${activityDate}?`
-        : `ยืนยันบันทึก “กิจกรรมอาสา” 1 ครั้ง ให้ ${v.empId} วันที่ ${activityDate}?`;
-
-    if (!confirm(confirmText)) return;
-
-    setSavingActivity(true);
-    setMsg(null);
-
-    try {
-      await addActivityOnce({
-        volunteerCode: v.empId,
-        name: v.name ?? "",
-        branch: (v.type as any) ?? "",
-        status: activityStatus,
-        activityDate,
-      });
-
-      setMsg("บันทึกกิจกรรมสำเร็จ ✅ (Leaderboard/โปรไฟล์จะอัปเดตตาม activity_history)");
-
-      // ✅ แต้มคงเหลือ (volunteers.points) ไม่ได้ถูกเพิ่มจาก activity_history อยู่แล้ว
-      // แต่เรายัง refresh เพื่ออัปเดต History/แต้ม/ความนิ่งของหน้า
-      await refreshPointsAndHistory(v.id, v.empId);
-    } catch (e: any) {
-      console.error(e);
-      setMsg(e?.message ?? "บันทึกกิจกรรมไม่สำเร็จ");
-    } finally {
-      setSavingActivity(false);
-    }
-  };
-
+  // ===== Locked screen =====
   if (!unlocked) {
     return (
       <div className="min-h-[70vh] flex items-center justify-center p-6">
@@ -244,6 +263,7 @@ export const Admin: React.FC = () => {
     );
   }
 
+  // ===== Main UI =====
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center gap-3">
@@ -261,14 +281,14 @@ export const Admin: React.FC = () => {
       <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
         <div className="flex items-center gap-3">
           <div className="flex-1">
-            <label className="text-sm text-gray-600">ค้นหารหัสพนักงาน</label>
+            <label className="text-sm text-gray-600">ค้นหารหัสพนักงาน / รหัสอาสา</label>
             <div className="relative mt-2">
               <input
                 value={searchCode}
                 onChange={(e) => setSearchCode(e.target.value)}
                 onKeyDown={(e) => (e.key === "Enter" ? handleSearch() : null)}
                 className="w-full border rounded-xl p-3 pl-10 outline-none focus:ring-2 focus:ring-primary"
-                placeholder="เช่น 80006423 หรือ CF123456"
+                placeholder="เช่น 80006423 หรือ V000001"
               />
               <Search
                 size={18}
@@ -282,12 +302,80 @@ export const Admin: React.FC = () => {
             disabled={loading}
             className="mt-7 px-4 py-3 rounded-xl bg-primary text-white font-bold hover:opacity-90 disabled:opacity-50"
           >
-            ค้นหา
+            {loading ? "กำลังค้นหา..." : "ค้นหา"}
           </button>
         </div>
 
-        {msg && <div className="mt-3 text-sm text-gray-700">{msg}</div>}
+        {msg && (
+          <div className="mt-3 text-sm text-gray-700 bg-gray-50 border border-gray-100 rounded-xl p-3">
+            {msg}
+          </div>
+        )}
       </div>
+
+      {/* Create volunteer (when not found) */}
+      {showCreate && (
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <div className="flex items-center gap-2 font-bold text-gray-800 mb-3">
+            <UserPlus size={18} /> เพิ่มอาสาใหม่ (กรณีไม่พบในระบบ)
+          </div>
+
+          <div className="grid md:grid-cols-3 gap-3">
+            <div>
+              <label className="text-sm text-gray-600">รหัสอาสา</label>
+              <input
+                className="w-full mt-2 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-primary font-mono"
+                value={newCode}
+                onChange={(e) => setNewCode(e.target.value)}
+                placeholder="เช่น V000001 หรือ EXT-123"
+              />
+            </div>
+
+            <div>
+              <label className="text-sm text-gray-600">ชื่อ-นามสกุล</label>
+              <input
+                className="w-full mt-2 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-primary"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="กรอกชื่อจริง"
+              />
+            </div>
+
+            <div>
+              <label className="text-sm text-gray-600">สังกัด</label>
+              <select
+                className="w-full mt-2 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-primary"
+                value={newBranch}
+                onChange={(e) => setNewBranch(e.target.value as any)}
+              >
+                <option value="BRANCH">BRANCH</option>
+                <option value="HO">HO</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 mt-4">
+            <button
+              onClick={handleCreateVolunteer}
+              disabled={loading}
+              className="inline-flex items-center gap-2 bg-blue-600 text-white font-bold rounded-xl py-3 px-4 hover:bg-blue-700 disabled:opacity-50"
+            >
+              <UserPlus size={18} /> สร้างอาสาใหม่
+            </button>
+
+            <button
+              onClick={() => setShowCreate(false)}
+              className="text-gray-500 hover:text-gray-800"
+            >
+              ยกเลิก
+            </button>
+          </div>
+
+          <div className="mt-3 text-xs text-gray-400">
+            * ระบบจะสร้างแต้มเริ่มต้น = 0 และสามารถเพิ่ม/หัก/โอนแต้มได้ทันที
+          </div>
+        </div>
+      )}
 
       {/* Selected */}
       {v && (
@@ -358,49 +446,6 @@ export const Admin: React.FC = () => {
               >
                 <MinusCircle size={18} /> หัก
               </button>
-            </div>
-
-            <div className="mt-3 text-xs text-gray-400">
-              * เพิ่มแต้มจะบันทึกลง point_transactions (type=adjustment) <br />
-              * หักแต้มจะ update volunteers.points และบันทึก log type=deduct
-            </div>
-          </div>
-
-          {/* ✅ Activity +1 */}
-          <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
-            <div className="font-bold text-gray-800 mb-3 inline-flex items-center gap-2">
-              <CalendarPlus size={18} /> บันทึก “กิจกรรมอาสา” (+1 ครั้ง)
-            </div>
-
-            <label className="text-sm text-gray-600">วันที่ทำกิจกรรม</label>
-            <input
-              type="date"
-              className="w-full mt-2 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-primary"
-              value={activityDate}
-              onChange={(e) => setActivityDate(e.target.value)}
-            />
-
-            <label className="text-sm text-gray-600 mt-3 block">ประเภทผู้เข้าร่วม</label>
-            <select
-              className="w-full mt-2 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-primary"
-              value={activityStatus}
-              onChange={(e) => setActivityStatus(e.target.value as any)}
-            >
-              <option value="VOLUNTEER">อาสาทั่วไป (VOLUNTEER)</option>
-              <option value="ADMIN">ทีมงาน / Admin (ADMIN)</option>
-            </select>
-
-            <button
-              onClick={handleAddActivity}
-              disabled={savingActivity || loading}
-              className="mt-4 w-full bg-indigo-600 text-white font-bold rounded-xl py-3 hover:bg-indigo-700 disabled:opacity-50"
-            >
-              {savingActivity ? "กำลังบันทึก..." : "บันทึกกิจกรรม +1 ครั้ง"}
-            </button>
-
-            <div className="mt-3 text-xs text-gray-400">
-              * รายการนี้จะถูกเพิ่มในตาราง <b>activity_history</b> <br />
-              * Leaderboard และ Profile จะคำนวณ “จำนวนครั้ง” จาก activity_history อัตโนมัติ
             </div>
           </div>
         </div>
