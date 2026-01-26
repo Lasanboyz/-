@@ -5,7 +5,6 @@ import { fetchVolunteerByCode, mapVolunteerRowToVolunteer } from "../services/da
 import type { Volunteer } from "../types";
 import PinLogin from "../components/PinLogin";
 
-// (optional) type เก็บข้อมูลผู้ใช้ที่ login แล้ว
 type AuthVolunteer = {
   id: string;
   volunteer_code: string;
@@ -101,11 +100,9 @@ export const Home: React.FC = () => {
   }, [searchTerm, me]);
 
   const goToProfile = (empId: string) => {
-    // ✅ คงเดิม: route ใหม่ /profile/:id (id = volunteer_code)
     navigate(`/profile/${empId}`);
   };
 
-  // ✅ ปุ่มแลกของรางวัล: โฟกัสค้นหา (ไม่ไปยุ่ง flow เดิม)
   const handleRedeemClick = () => {
     if (!me) {
       setToast("กรุณาเข้าสู่ระบบก่อน เพื่อใช้งานการแลกของรางวัล");
@@ -155,7 +152,6 @@ export const Home: React.FC = () => {
         <div className="text-center space-y-4 flex flex-col items-center">
           <div className="relative">
             <div className="inline-flex items-center justify-center bg-white rounded-[28px] shadow-xl border border-pink-50 min-w-[120px] min-h-[120px] px-6">
-              {/* ถ้ามีโลโก้ให้โชว์โลโก้ แต่ถ้าไม่มีก็โชว์หัวใจ */}
               {!logoFailed ? (
                 <img
                   src="/logo.png"
@@ -258,10 +254,7 @@ export const Home: React.FC = () => {
             </div>
           )}
 
-          {/* Helper hint */}
-          <div className="text-center mt-3 text-xs text-gray-400">
-            * ระบบจะค้นหาให้อัตโนมัติ
-          </div>
+          <div className="text-center mt-3 text-xs text-gray-400">* ระบบจะค้นหาให้อัตโนมัติ</div>
         </div>
 
         {/* Action buttons */}
