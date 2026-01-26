@@ -3,10 +3,31 @@ import { useNavigate } from "react-router-dom";
 import { Search, User, Gift, Trophy, Loader2 } from "lucide-react";
 import { fetchVolunteerByCode, mapVolunteerRowToVolunteer } from "../services/dataService";
 import type { Volunteer } from "../types";
+import PinLogin from "../components/PinLogin";
+
+// (optional) type เก็บข้อมูลผู้ใช้ที่ login แล้ว
+type AuthVolunteer = {
+  id: string;
+  volunteer_code: string;
+  name: string;
+  branch: string;
+  role?: string | null;
+  points?: number | null;
+};
 
 export const Home: React.FC = () => {
   const navigate = useNavigate();
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // ✅ Auth state (อ่านจาก localStorage)
+  const [me, setMe] = useState<AuthVolunteer | null>(() => {
+    try {
+      const raw = localStorage.getItem("auth_volunteer");
+      return raw ? (JSON.parse(raw) as AuthVolunteer) : null;
+    } catch {
+      return null;
+    }
+  });
 
   const [searchTerm, setSearchTerm] = useState("");
   const [result, setResult] = useState<Volunteer | null>(null);
@@ -23,6 +44,9 @@ export const Home: React.FC = () => {
 
   // ✅ Debounce (กันยิง Supabase ทุกตัวอักษร) — คง logic เดิม
   useEffect(() => {
+    // ✅ ยังไม่ login → ไม่ต้องค้นหา/ไม่ยิง supabase
+    if (!me) return;
+
     const term = searchTerm.trim();
 
     if (term.length < 2) {
@@ -74,7 +98,7 @@ export const Home: React.FC = () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [searchTerm]);
+  }, [searchTerm, me]);
 
   const goToProfile = (empId: string) => {
     // ✅ คงเดิม: route ใหม่ /profile/:id (id = volunteer_code)
@@ -83,6 +107,12 @@ export const Home: React.FC = () => {
 
   // ✅ ปุ่มแลกของรางวัล: โฟกัสค้นหา (ไม่ไปยุ่ง flow เดิม)
   const handleRedeemClick = () => {
+    if (!me) {
+      setToast("กรุณาเข้าสู่ระบบก่อน เพื่อใช้งานการแลกของรางวัล");
+      window.setTimeout(() => setToast(""), 3500);
+      return;
+    }
+
     searchInputRef.current?.focus();
     searchInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     setToast("กรุณาค้นหารหัสพนักงานของคุณก่อน เพื่อเข้าสู่ระบบแลกของรางวัล");
@@ -99,6 +129,11 @@ export const Home: React.FC = () => {
   };
 
   const trimmed = useMemo(() => searchTerm.trim(), [searchTerm]);
+
+  // ✅ ถ้ายังไม่ login ให้แสดงหน้าใส่รหัส + PIN ก่อน
+  if (!me) {
+    return <PinLogin onSuccess={(v: any) => setMe(v)} />;
+  }
 
   return (
     <div className="relative">
