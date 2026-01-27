@@ -174,7 +174,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (vErr) throw vErr;
       if (!vRow?.id) return bad(res, 404, "volunteer not found");
 
-      const used = Number(reqRow.points_used ?? 0);
+      const used = Math.max(0, Number(reqRow.points_used ?? 0));
       const currentPoints = Number(vRow.points ?? 0);
       if (currentPoints < used) return bad(res, 400, `points not enough (have=${currentPoints}, need=${used})`);
 
@@ -197,11 +197,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .eq("id", vRow.id);
       if (updPointsErr) throw updPointsErr;
 
-      // log
+      // ✅ log: redeem = หักแต้ม => amount ติดลบ
       await supabase.from("point_transactions").insert({
         from_volunteer_id: null,
         to_volunteer_id: vRow.id,
-        amount: used,
+        amount: -Math.abs(used),
         type: "redeem",
         note: note || `redeem ${reqRow.reward_id} x${qty}`,
       });
@@ -214,9 +214,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.error("[api/admin/redemptions] error:", e);
     return bad(res, 500, e?.message || "Internal Server Error", {
       hint:
-        "Check env SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY and schema: redemption_requests(volunteer_id,reward_id,points_used), rewards(title,stock,image_url), volunteers(id,volunteer_code,name,branch,points)",
+        "Check env SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY and schema: redemption_requests(volunteer_id,reward_id,points_used,admin_note), rewards(title,stock,image_url), volunteers(id,volunteer_code,name,branch,points), point_transactions(amount,type,note)",
     });
   }
 }
-
-//
