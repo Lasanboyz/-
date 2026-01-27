@@ -1,5 +1,5 @@
 // pages/Admin.tsx
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   XCircle,
   Filter,
+  KeyRound,
 } from "lucide-react";
 
 import type { Volunteer } from "../types";
@@ -27,23 +28,147 @@ import {
   adminDeductPoints,
   adminFetchPointHistory,
   createVolunteer,
-
   // ✅ activity
   fetchActivityHistoryByCode,
   adminAddActivityViaApi,
   adminVoidActivityById,
   adminUpdateVolunteerRole,
   type VolunteerRole,
-
-  // ✅ redemptions (NEW)
-  adminListRedemptions,
-  adminApproveRedemption,
-  adminRejectRedemption,
-  type AdminRedemptionRow,
-  type RedemptionStatus,
 } from "../services/dataService";
 
 type TxRow = any;
+
+// ===============================
+// ✅ Redemptions types (from /api/admin/redemptions)
+// ===============================
+type RedemptionStatus = "PENDING" | "APPROVED" | "REJECTED";
+
+type AdminRedemptionRow = {
+  request_id: string;
+  status: RedemptionStatus;
+  created_at: string;
+
+  qty: number;
+  points_used: number;
+
+  volunteer_id: string;
+  volunteer_code: string;
+  volunteer_name: string;
+  volunteer_branch: string;
+
+  reward_id: string;
+  reward_title: string;
+  reward_cost: number; // ใน schema คุณเป็น 0 ไว้ก็ได้
+  reward_stock: number | null;
+  reward_image_url: string;
+};
+
+// ===============================
+// ✅ JWT helper (ไม่ต้องไปแก้ใน F12 อีก)
+// - พยายาม "เดา/ดึง" token จาก localStorage หลาย key
+// - ถ้าเดาไม่เจอ: ให้ paste token แล้วกดบันทึก
+// ===============================
+const ADMIN_JWT_STORAGE_KEY = "admin_jwt_token_v1";
+
+function pickFirstNonEmpty(...vals: Array<string | null | undefined>) {
+  for (const v of vals) {
+    const s = String(v ?? "").trim();
+    if (s) return s;
+  }
+  return "";
+}
+
+function tryDetectJwtFromLocalStorage(): { token: string; source: string } {
+  try {
+    // 1) ของเราที่เซฟไว้เอง
+    const direct = localStorage.getItem(ADMIN_JWT_STORAGE_KEY);
+    if (direct) return { token: direct, source: ADMIN_JWT_STORAGE_KEY };
+
+    // 2) คีย์ที่พบบ่อยๆที่คุณเคยบอกไว้/หน้าจอ hint
+    const commonKeys = [
+      "jwt",
+      "jwt_token",
+      "token",
+      "auth_token",
+      "app_token",
+      "volunteer_token",
+      "access_token",
+    ];
+    for (const k of commonKeys) {
+      const v = localStorage.getItem(k);
+      if (v && v.split(".").length === 3) return { token: v, source: k };
+    }
+
+    // 3) Supabase (บางโปรเจกต์ใช้ key รูปแบบ sb-xxxx-auth-token)
+    // เราจะไล่ดูทุก key ที่มีคำว่า "auth" และ "token"
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i) || "";
+      const val = localStorage.getItem(key) || "";
+
+      // ถ้าเป็น JWT ตรงๆ
+      if (val && val.split(".").length === 3) {
+        if (/auth|token|jwt|supabase|sb-/i.test(key)) return { token: val, source: key };
+      }
+
+      // ถ้าเป็น JSON ที่ข้างในมี access_token
+      if (/auth|token|supabase|sb-/i.test(key)) {
+        try {
+          const obj = JSON.parse(val);
+          const access = obj?.access_token || obj?.currentSession?.access_token || obj?.session?.access_token;
+          if (access && String(access).split(".").length === 3) return { token: String(access), source: `${key} (json.access_token)` };
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    return { token: "", source: "" };
+  } catch {
+    return { token: "", source: "" };
+  }
+}
+
+async function apiListRedemptions(params: { status: RedemptionStatus; search?: string; jwt: string }) {
+  const qs = new URLSearchParams();
+  qs.set("status", params.status);
+  if (params.search) qs.set("search", params.search);
+
+  const res = await fetch(`/api/admin/redemptions?${qs.toString()}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${params.jwt}`,
+    },
+  });
+
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || json?.ok === false) {
+    const msg = json?.error || `HTTP ${res.status}`;
+    throw new Error(msg);
+  }
+  return (json?.data ?? []) as AdminRedemptionRow[];
+}
+
+async function apiActRedemption(params: { action: "approve" | "reject"; request_id: string; note?: string; jwt: string }) {
+  const res = await fetch(`/api/admin/redemptions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${params.jwt}`,
+    },
+    body: JSON.stringify({
+      action: params.action,
+      request_id: params.request_id,
+      note: params.note || "",
+    }),
+  });
+
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || json?.ok === false) {
+    const msg = json?.error || `HTTP ${res.status}`;
+    throw new Error(msg);
+  }
+  return json?.data;
+}
 
 export const Admin: React.FC = () => {
   const navigate = useNavigate();
@@ -89,13 +214,25 @@ export const Admin: React.FC = () => {
   const [newName, setNewName] = useState("");
   const [newBranch, setNewBranch] = useState<"HO" | "BRANCH">("BRANCH");
 
-  // ===== Redemptions (NEW) =====
+  // ===== Tabs =====
   const [activeTab, setActiveTab] = useState<"VOLUNTEER" | "REDEEM">("VOLUNTEER");
+
+  // ===== Redemptions =====
   const [redeemStatus, setRedeemStatus] = useState<RedemptionStatus>("PENDING");
   const [redeemSearch, setRedeemSearch] = useState<string>("");
   const [redeemRows, setRedeemRows] = useState<AdminRedemptionRow[]>([]);
   const [loadingRedeem, setLoadingRedeem] = useState(false);
   const [actingRequestId, setActingRequestId] = useState<string>("");
+
+  // ✅ JWT UI (ไม่ต้องไปแก้ F12)
+  const [jwt, setJwt] = useState<string>("");
+  const [jwtSource, setJwtSource] = useState<string>("");
+
+  useEffect(() => {
+    const d = tryDetectJwtFromLocalStorage();
+    setJwt(d.token);
+    setJwtSource(d.source);
+  }, []);
 
   const canSubmit = useMemo(() => {
     const n = Number(amount);
@@ -154,17 +291,48 @@ export const Admin: React.FC = () => {
     }
   };
 
+  const persistJwt = (token: string) => {
+    const t = String(token || "").trim();
+    if (!t) {
+      setMsg("กรุณาวาง JWT token ก่อน");
+      return;
+    }
+    localStorage.setItem(ADMIN_JWT_STORAGE_KEY, t);
+    setJwt(t);
+    setJwtSource(ADMIN_JWT_STORAGE_KEY);
+    setMsg("บันทึก JWT token แล้ว ✅ (ไม่ต้องเปิด F12 อีก)");
+  };
+
+  const autoDetectJwt = () => {
+    const d = tryDetectJwtFromLocalStorage();
+    setJwt(d.token);
+    setJwtSource(d.source);
+    if (!d.token) setMsg("ยังเดา JWT ไม่เจอ — ให้ paste token แล้วกดบันทึก");
+    else setMsg(`เจอ JWT แล้ว ✅ (มาจาก: ${d.source})`);
+  };
+
   const refreshRedemptions = async () => {
     setLoadingRedeem(true);
     setMsg(null);
+
+    const token = String(jwt || "").trim();
+    if (!token) {
+      setLoadingRedeem(false);
+      setRedeemRows([]);
+      setMsg("ยังไม่มี JWT token — วาง token แล้วกด “บันทึก” ก่อน");
+      return;
+    }
+
     try {
-      const rows = await adminListRedemptions({
+      const rows = await apiListRedemptions({
         status: redeemStatus,
         search: redeemSearch.trim(),
+        jwt: token,
       });
       setRedeemRows(rows ?? []);
     } catch (e: any) {
       console.error("[Admin] redemptions error:", e);
+      setRedeemRows([]);
       setMsg(e?.message ?? "โหลดรายการแลกรางวัลไม่สำเร็จ");
     } finally {
       setLoadingRedeem(false);
@@ -195,7 +363,6 @@ export const Admin: React.FC = () => {
       const mapped = mapVolunteerRowToVolunteer(row);
       setV(mapped);
 
-      // ✅ role from DB
       const r = String((row as any).role ?? "VOLUNTEER").toUpperCase();
       setRole((["VOLUNTEER", "STAFF", "ADMIN"].includes(r) ? r : "VOLUNTEER") as VolunteerRole);
 
@@ -250,7 +417,6 @@ export const Admin: React.FC = () => {
     if (!v) return;
     if (!countAsActivity) return;
 
-    // ✅ staff ก็ถือเป็น VOLUNTEER ใน activity_history
     const status = role === "ADMIN" ? "ADMIN" : "VOLUNTEER";
 
     await adminAddActivityViaApi({
@@ -300,7 +466,6 @@ export const Admin: React.FC = () => {
     setLoading(true);
     setMsg(null);
     try {
-      // ✅ ใช้ตัวเดิมที่ "update volunteers.points" ให้แต้มลดจริง
       await adminDeductPoints({
         volunteerCode: v.empId,
         amount: n,
@@ -372,14 +537,16 @@ export const Admin: React.FC = () => {
 
   const handleApprove = async (request_id: string) => {
     const id = String(request_id ?? "").trim();
+    const token = String(jwt || "").trim();
     if (!id) return;
+    if (!token) return setMsg("ยังไม่มี JWT token — วาง token แล้วกดบันทึกก่อน");
 
     if (!confirm("ยืนยันอนุมัติคำขอแลกรางวัลนี้? (จะตัดแต้ม/ตัดสต็อกตามระบบ API)")) return;
 
     setActingRequestId(id);
     setMsg(null);
     try {
-      await adminApproveRedemption(id);
+      await apiActRedemption({ action: "approve", request_id: id, jwt: token });
       setMsg("อนุมัติสำเร็จ ✅");
       await refreshRedemptions();
     } catch (e: any) {
@@ -392,14 +559,16 @@ export const Admin: React.FC = () => {
 
   const handleReject = async (request_id: string) => {
     const id = String(request_id ?? "").trim();
+    const token = String(jwt || "").trim();
     if (!id) return;
+    if (!token) return setMsg("ยังไม่มี JWT token — วาง token แล้วกดบันทึกก่อน");
 
     if (!confirm("ยืนยันปฏิเสธคำขอแลกรางวัลนี้?")) return;
 
     setActingRequestId(id);
     setMsg(null);
     try {
-      await adminRejectRedemption(id);
+      await apiActRedemption({ action: "reject", request_id: id, jwt: token });
       setMsg("ปฏิเสธสำเร็จ ✅");
       await refreshRedemptions();
     } catch (e: any) {
@@ -467,7 +636,6 @@ export const Admin: React.FC = () => {
         <button
           onClick={() => {
             setActiveTab("REDEEM");
-            // โหลดครั้งแรกแบบไม่รบกวนผู้ใช้
             if (redeemRows.length === 0) refreshRedemptions();
           }}
           className={`px-4 py-2 rounded-xl text-sm font-bold transition inline-flex items-center gap-2 ${
@@ -489,6 +657,57 @@ export const Admin: React.FC = () => {
       ============================ */}
       {activeTab === "REDEEM" && (
         <div className="space-y-4">
+          {/* ✅ JWT panel */}
+          <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+            <div className="flex items-center gap-2 font-bold text-gray-800">
+              <KeyRound size={18} /> JWT สำหรับเรียก API (ไม่ต้องเปิด F12)
+            </div>
+
+            <div className="text-xs text-gray-500 mt-1">
+              * ระบบอนุมัติ/ปฏิเสธต้องส่ง <span className="font-mono">Authorization: Bearer &lt;JWT&gt;</span>
+            </div>
+
+            <div className="mt-3 grid md:grid-cols-[1fr_auto_auto] gap-2 items-end">
+              <div>
+                <label className="text-sm text-gray-600">JWT token</label>
+                <input
+                  value={jwt}
+                  onChange={(e) => setJwt(e.target.value)}
+                  className="w-full mt-2 border rounded-xl p-3 outline-none focus:ring-2 focus:ring-primary font-mono text-xs"
+                  placeholder="วาง JWT ที่นี่ (xxx.yyy.zzz)"
+                />
+                <div className="mt-2 text-xs text-gray-400">
+                  สถานะ:{" "}
+                  {jwt ? (
+                    <span className="text-green-700 font-bold">มี token</span>
+                  ) : (
+                    <span className="text-red-600 font-bold">ยังไม่มี token</span>
+                  )}
+                  {jwtSource ? <span className="ml-2">• source: {jwtSource}</span> : null}
+                </div>
+              </div>
+
+              <button
+                onClick={() => persistJwt(jwt)}
+                className="h-[46px] px-4 rounded-xl bg-gray-900 text-white font-bold hover:bg-black"
+              >
+                บันทึก
+              </button>
+
+              <button
+                onClick={autoDetectJwt}
+                className="h-[46px] px-4 rounded-xl bg-gray-100 text-gray-800 font-bold hover:bg-gray-200"
+              >
+                ดึงอัตโนมัติ
+              </button>
+            </div>
+
+            <div className="mt-3 text-xs text-gray-400">
+              * ถ้ายังไม่แน่ใจว่า JWT คืออันไหน: เปิดหน้า <span className="font-mono">/api/admin/redemptions?status=PENDING</span>{" "}
+              แล้วดูว่ามันขึ้น 401 หรือไม่
+            </div>
+          </div>
+
           <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
             <div className="flex flex-col md:flex-row md:items-end gap-3">
               <div className="flex-1">
@@ -496,7 +715,7 @@ export const Admin: React.FC = () => {
                   <Gift size={18} /> รายการแลกรางวัล
                 </div>
                 <div className="text-xs text-gray-500 mt-1">
-                  * ถ้าโหลดไม่ขึ้น/401 ให้เช็กว่า “JWT token” ถูกเก็บใน localStorage (app_token/auth_token/jwt/token/volunteer_token)
+                  * ถ้าไม่ขึ้น ให้เช็ก JWT ด้านบนก่อน แล้วค่อยกด Refresh
                 </div>
               </div>
 
@@ -559,7 +778,7 @@ export const Admin: React.FC = () => {
               <div className="space-y-2">
                 {redeemRows.map((r) => {
                   const busy = actingRequestId === r.request_id;
-                  const status = String(r.status ?? "").toUpperCase();
+                  const status = String(r.status ?? "").toUpperCase() as RedemptionStatus;
 
                   return (
                     <div key={r.request_id} className="border rounded-2xl p-4">
@@ -578,8 +797,7 @@ export const Admin: React.FC = () => {
 
                           <div>
                             <div className="text-sm font-bold text-gray-800">
-                              {r.reward_title}{" "}
-                              <span className="text-xs text-gray-500 font-normal">x{r.qty}</span>
+                              {r.reward_title} <span className="text-xs text-gray-500 font-normal">x{r.qty}</span>
                             </div>
 
                             <div className="text-xs text-gray-500 mt-1">
@@ -647,7 +865,7 @@ export const Admin: React.FC = () => {
             )}
 
             <div className="mt-3 text-xs text-gray-400">
-              * อนุมัติ/ปฏิเสธจะเรียก <span className="font-mono">/api/admin/redemptions</span> (ต้องมี Bearer token)
+              * เรียก <span className="font-mono">/api/admin/redemptions</span> (ต้องมี Bearer token)
             </div>
           </div>
         </div>
