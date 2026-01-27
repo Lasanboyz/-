@@ -50,7 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // ✅ rewards ของคุณใช้ title และ "ไม่มี cost" → ไม่ select cost
       const { data: rewardRows, error: rewardErr } = await supabase
         .from("rewards")
-        .select("id, title, stock, image_url, imageUrl")
+.select("id, title, stock, image_url")
         .in("id", rewardIds);
 
       if (rewardErr) throw rewardErr;
@@ -73,7 +73,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const vol = volMap.get(String(r.volunteer_id ?? "")) ?? null;
 
         const rewardTitle = reward?.title ?? r.reward_title ?? "";
-        const rewardImage = reward?.image_url ?? reward?.imageUrl ?? "";
+        const rewardImage = reward?.image_url ?? "";
 
         return {
           request_id: r.id,
