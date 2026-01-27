@@ -96,6 +96,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           request_id: r.id,
           status: r.status,
           created_at: r.created_at,
+          phone_number: r.phone_number ?? "",   // ✅ เพิ่มบรรทัดนี้
           qty: Number(r.qty ?? 1),
           points_used: Number(r.points_used ?? 0),
 
