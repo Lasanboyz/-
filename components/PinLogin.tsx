@@ -1,4 +1,6 @@
+// components/PinLogin.tsx
 import { useMemo, useState } from "react";
+import type { KeyboardEvent } from "react";
 import { Eye, EyeOff, Lock, IdCard } from "lucide-react";
 
 export default function PinLogin({ onSuccess }: { onSuccess: (data: any) => void }) {
@@ -46,7 +48,7 @@ export default function PinLogin({ onSuccess }: { onSuccess: (data: any) => void
     }
   };
 
-  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") login();
   };
 
