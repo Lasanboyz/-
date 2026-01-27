@@ -1,5 +1,5 @@
-import { getAdminClient } from "../_utils/supabaseAdmin.js";
-import { getBearerToken, verifyJwtHS256 } from "../_utils/jwt.js";
+import { getAdminClient } from "../_lib/supabaseAdmin.js";
+import { getBearerToken, verifyJwtHS256 } from "../_lib/jwt.js";
 
 export default async function handler(req, res) {
   if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
