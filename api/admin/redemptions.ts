@@ -47,11 +47,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         new Set(requests.map((r: any) => String(r.volunteer_id ?? "").trim()).filter(Boolean))
       );
 
-      // ✅ rewards ของคุณใช้ "title" ไม่ใช่ "name"
-      // และอาจเก็บรูปเป็น image_url หรือ imageUrl
+      // ✅ rewards ของคุณใช้ title และ "ไม่มี cost" → ไม่ select cost
       const { data: rewardRows, error: rewardErr } = await supabase
         .from("rewards")
-        .select("id, title, cost, stock, image_url, imageUrl")
+        .select("id, title, stock, image_url, imageUrl")
         .in("id", rewardIds);
 
       if (rewardErr) throw rewardErr;
@@ -90,7 +89,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
           reward_id: r.reward_id,
           reward_title: rewardTitle,
-          reward_cost: Number(reward?.cost ?? 0),
+          reward_cost: 0, // ✅ ไม่มี cost ใน schema ของคุณ
           reward_stock: typeof reward?.stock === "number" ? reward.stock : null,
           reward_image_url: rewardImage,
         };
@@ -109,6 +108,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return ok(res, rows);
     }
 
+    // POST ยังใช้ points_used จาก redemption_requests เป็นหลัก → ไม่ต้องพึ่ง rewards.cost
     if (req.method === "POST") {
       const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
       const action = String(body?.action ?? "").toLowerCase();
@@ -197,8 +197,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return bad(res, 405, "Method not allowed");
   } catch (e: any) {
     console.error("[api/admin/redemptions] error:", e);
-    return bad(res, 500, e?.message || "Internal Server Error", {
-      hint: "Your rewards table probably uses title (not name). Also check env vars.",
-    });
+    return bad(res, 500, e?.message || "Internal Server Error");
   }
 }
