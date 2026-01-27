@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, CheckCircle, Phone, X, Loader2 } from "lucide-react";
+import { fetchVolunteerPointsByCode } from "../services/dataService";
 
 type AuthVolunteer = {
   id: string;
@@ -72,6 +73,38 @@ export const Rewards: React.FC = () => {
 
   const normalizePhone = (s: string) => s.replace(/\s+/g, "").trim();
 
+  const defaultImg =
+    "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=1200&auto=format&fit=crop";
+
+  // ✅ ดึงแต้มจริงจาก DB แล้ว sync กลับไป localStorage
+  const refreshPointsFromDb = async (overrideMe?: AuthVolunteer | null) => {
+    try {
+      const who = overrideMe ?? me;
+      const code = String(who?.volunteer_code ?? "").trim().toUpperCase();
+      if (!code) return;
+
+      const latest = await fetchVolunteerPointsByCode(code);
+      const pts = Number((latest as any)?.points ?? 0);
+
+      setCurrentPoints(pts);
+
+      // sync auth_volunteer ให้หน้าอื่นๆใช้ค่าล่าสุด
+      try {
+        const raw = localStorage.getItem("auth_volunteer");
+        const v = raw ? (JSON.parse(raw) as AuthVolunteer) : null;
+        if (v) {
+          const next = { ...v, points: pts };
+          localStorage.setItem("auth_volunteer", JSON.stringify(next));
+          setMe(next);
+        }
+      } catch {
+        // ignore
+      }
+    } catch {
+      // ถ้าดึงไม่ได้ก็ไม่ให้พัง ใช้ค่าเดิมไปก่อน
+    }
+  };
+
   // -------------------------
   // Guard: must login
   // -------------------------
@@ -82,7 +115,7 @@ export const Rewards: React.FC = () => {
   }, [token, me?.id, navigate]);
 
   // -------------------------
-  // Load rewards + pending
+  // Load rewards + pending + points(DB)
   // -------------------------
   useEffect(() => {
     let cancelled = false;
@@ -91,6 +124,9 @@ export const Rewards: React.FC = () => {
       try {
         setPageLoading(true);
         setLoadError("");
+
+        // 0) refresh points from DB (ก่อน) เพื่อให้ UI บนสุดตรง
+        await refreshPointsFromDb();
 
         // 1) rewards list
         const r1 = await fetch("/api/rewards/list", {
@@ -107,7 +143,7 @@ export const Rewards: React.FC = () => {
           description: x.description ?? null,
           cost: Number(x.cost_points ?? 0),
           stock: Number(x.stock ?? 0),
-          imageUrl: x.image_url || "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=1200&auto=format&fit=crop",
+          imageUrl: x.image_url || defaultImg,
         }));
 
         // 2) pending requests (ถ้ามี endpoint นี้)
@@ -126,7 +162,6 @@ export const Rewards: React.FC = () => {
             pending = (d2?.requests || []).filter((x: PendingReq) => x.status === "PENDING");
           }
         } catch {
-          // ถ้าไม่มี endpoint นี้ก็ไม่เป็นไร แค่ไม่โชว์ pending list
           pending = [];
         }
 
@@ -135,8 +170,8 @@ export const Rewards: React.FC = () => {
         setRewards(mapped);
         setPendingRequests(pending);
 
-        // แต้มจาก localStorage (me.points)
-        setCurrentPoints(Number(me?.points ?? 0));
+        // 3) refresh points from DB (หลัง) เผื่อมีอะไรเปลี่ยนระหว่างโหลด
+        await refreshPointsFromDb();
       } catch (e: any) {
         if (!cancelled) setLoadError(e?.message ?? "โหลดข้อมูลไม่สำเร็จ");
       } finally {
@@ -148,7 +183,8 @@ export const Rewards: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [token, me?.points]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
 
   // pending map: ป้องกันแลกซ้ำ “ของชิ้นเดียวกัน” ระหว่างรออนุมัติ
   const pendingMap = useMemo(() => {
@@ -198,7 +234,7 @@ export const Rewards: React.FC = () => {
         body: JSON.stringify({
           reward_id: selectedReward.id,
           qty: 1,
-          phone_number: phone, // server จะใช้หรือไม่ใช้ก็ได้
+          phone_number: phone,
         }),
       });
 
@@ -208,22 +244,8 @@ export const Rewards: React.FC = () => {
         throw new Error(data?.error || "แลกของรางวัลไม่สำเร็จ");
       }
 
-      // อัปเดตแต้มใหม่ (จาก API)
-      const newPoints = Number(data?.new_points ?? currentPoints);
-      setCurrentPoints(newPoints);
-
-      // อัปเดต localStorage auth_volunteer ให้หน้าอื่นๆ sync
-      try {
-        const raw = localStorage.getItem("auth_volunteer");
-        const v = raw ? (JSON.parse(raw) as AuthVolunteer) : null;
-        if (v) {
-          const next = { ...v, points: newPoints };
-          localStorage.setItem("auth_volunteer", JSON.stringify(next));
-          setMe(next);
-        }
-      } catch {
-        // ignore
-      }
+      // ✅ หลังแลก: ให้ยึดแต้มจริงจาก DB (กันไม่ตรง)
+      await refreshPointsFromDb();
 
       // เพิ่ม pending list ทันที (ให้ UX เห็นว่า “ส่งคำขอแล้ว”)
       const reqId = data?.request?.id || data?.request_id || "req_" + Date.now();
@@ -246,8 +268,7 @@ export const Rewards: React.FC = () => {
       window.scrollTo({ top: 0, behavior: "smooth" });
       window.setTimeout(() => setSuccessMsg(""), 4000);
 
-      // refresh rewards stock (optional)
-      // โหลดใหม่แบบเบาๆ
+      // refresh rewards stock (optional) — โหลดใหม่แบบเบาๆ
       try {
         const r1 = await fetch("/api/rewards/list");
         const d1 = await r1.json().catch(() => ({}));
@@ -258,9 +279,7 @@ export const Rewards: React.FC = () => {
             description: x.description ?? null,
             cost: Number(x.cost_points ?? 0),
             stock: Number(x.stock ?? 0),
-            imageUrl:
-              x.image_url ||
-              "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=1200&auto=format&fit=crop",
+            imageUrl: x.image_url || defaultImg,
           }));
           setRewards(mapped);
         }
@@ -414,12 +433,7 @@ export const Rewards: React.FC = () => {
                 className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden flex flex-col hover:shadow-md transition"
               >
                 <div className="h-48 bg-gray-100 relative">
-                  <img
-                    src={reward.imageUrl}
-                    alt={reward.name}
-                    className="w-full h-full object-cover"
-                    loading="lazy"
-                  />
+                  <img src={reward.imageUrl} alt={reward.name} className="w-full h-full object-cover" loading="lazy" />
 
                   <div className="absolute top-3 left-3 flex gap-2">
                     {isPending && (
@@ -442,9 +456,7 @@ export const Rewards: React.FC = () => {
                 <div className="p-4 flex-grow flex flex-col justify-between">
                   <div>
                     <h3 className="font-extrabold text-gray-900 text-lg leading-snug">{reward.name}</h3>
-                    {reward.description && (
-                      <p className="mt-1 text-xs text-gray-500 line-clamp-2">{reward.description}</p>
-                    )}
+                    {reward.description && <p className="mt-1 text-xs text-gray-500 line-clamp-2">{reward.description}</p>}
 
                     <div className="mt-2 flex items-center justify-between">
                       <div className="text-pink-600 font-extrabold text-xl">
@@ -491,8 +503,7 @@ export const Rewards: React.FC = () => {
             <div className="mb-5">
               <h3 className="text-xl font-extrabold text-gray-900 mb-1">ยืนยันการแลกรางวัล</h3>
               <p className="text-gray-500 text-sm">
-                “{selectedReward.name}” ใช้{" "}
-                <span className="font-bold text-pink-600">{selectedReward.cost}</span> คะแนน
+                “{selectedReward.name}” ใช้ <span className="font-bold text-pink-600">{selectedReward.cost}</span> คะแนน
               </p>
             </div>
 
