@@ -16,45 +16,35 @@ function getAdminClient() {
   });
 }
 
-const ok = (res: VercelResponse, data: any) => res.status(200).json({ ok: true, data });
+const ok = (res: VercelResponse, payload: any) => res.status(200).json({ ok: true, ...payload });
 const bad = (res: VercelResponse, status: number, error: string, extra?: any) =>
   res.status(status).json({ ok: false, error, ...(extra ? { extra } : {}) });
 
 const asUpper = (v: any) => String(v ?? "").trim().toUpperCase();
 
 async function safeUpdateRequestStatus(
-  supabase: any,
+  supabase: ReturnType<typeof getAdminClient>,
   requestId: string,
-  status: "APPROVED" | "REJECTED",
-  note?: string
+  patch: Record<string, any>
 ) {
-  // บาง schema ไม่มี admin_note → ลองอัปเดตแบบมี note ก่อน ถ้าพังให้ retry แบบไม่มี
-  const payloadWithNote: any = { status };
-  if (note && note.trim()) payloadWithNote.admin_note = note.trim();
+  // บางโปรเจกต์ยังไม่มี column admin_note → fallback อัปเดตแบบไม่มี admin_note
+  const { error } = await supabase.from("redemption_requests").update(patch).eq("id", requestId);
+  if (!error) return;
 
-  const { error: e1 } = await supabase
-    .from("redemption_requests")
-    .update(payloadWithNote)
-    .eq("id", requestId);
+  const msg = String((error as any)?.message ?? "");
+  const code = String((error as any)?.code ?? "");
 
-  if (!e1) return;
-
-  // ถ้า error เกี่ยวกับ column admin_note ไม่มีจริง → retry แบบไม่มี admin_note
-  const msg = String(e1.message ?? "");
+  // เผื่อ schema cache / column missing
   const looksLikeMissingColumn =
-    msg.toLowerCase().includes("column") && msg.toLowerCase().includes("admin_note");
+    msg.toLowerCase().includes("admin_note") ||
+    msg.toLowerCase().includes("column") ||
+    code === "42703";
 
-  if (looksLikeMissingColumn) {
-    const { error: e2 } = await supabase
-      .from("redemption_requests")
-      .update({ status })
-      .eq("id", requestId);
+  if (!looksLikeMissingColumn || !("admin_note" in patch)) throw error;
 
-    if (e2) throw e2;
-    return;
-  }
-
-  throw e1;
+  const { admin_note, ...rest } = patch;
+  const { error: error2 } = await supabase.from("redemption_requests").update(rest).eq("id", requestId);
+  if (error2) throw error2;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -63,6 +53,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // =========================
     // GET: /api/admin/redemptions?status=PENDING&search=...
+    // คืนรูปแบบ: { ok:true, rows:[...] }
     // =========================
     if (req.method === "GET") {
       const status = asUpper(req.query.status ?? "PENDING");
@@ -78,7 +69,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (reqErr) throw reqErr;
 
       const requests = (reqRows ?? []).filter((r: any) => r?.id);
-      if (requests.length === 0) return ok(res, []);
+      if (requests.length === 0) return ok(res, { rows: [] });
 
       const rewardIds = Array.from(
         new Set(requests.map((r: any) => String(r.reward_id ?? "").trim()).filter(Boolean))
@@ -91,12 +82,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .from("rewards")
         .select("id, title, stock, image_url")
         .in("id", rewardIds);
+
       if (rewardErr) throw rewardErr;
 
       const { data: volRows, error: volErr } = await supabase
         .from("volunteers")
         .select("id, volunteer_code, name, branch, points")
         .in("id", volunteerIds);
+
       if (volErr) throw volErr;
 
       const rewardMap = new Map<string, any>();
@@ -126,7 +119,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
           reward_id: r.reward_id,
           reward_title: rewardTitle,
-          reward_cost: 0,
           reward_stock: typeof reward?.stock === "number" ? reward.stock : Number(reward?.stock ?? 0),
           reward_image_url: rewardImage,
         };
@@ -142,11 +134,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
       }
 
-      return ok(res, rows);
+      return ok(res, { rows });
     }
 
     // =========================
     // POST: { action:"approve"|"reject", request_id, note? }
+    // คืนรูปแบบ: { ok:true, result:{...} }
     // =========================
     if (req.method === "POST") {
       const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
@@ -169,8 +162,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return bad(res, 400, `request is not PENDING (current=${reqRow.status})`);
 
       if (action === "reject") {
-        await safeUpdateRequestStatus(supabase, request_id, "REJECTED", note || "Rejected by admin");
-        return ok(res, { request_id, status: "REJECTED" });
+        await safeUpdateRequestStatus(supabase, request_id, {
+          status: "REJECTED",
+          admin_note: note || "Rejected by admin",
+        });
+        return ok(res, { result: { request_id, status: "REJECTED" } });
       }
 
       // approve: check stock
@@ -187,6 +183,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const stock = Number(rewardRow.stock ?? 0);
       if (stock < qty) return bad(res, 400, `stock not enough (stock=${stock}, qty=${qty})`);
 
+      // load volunteer by volunteer_id
       const { data: vRow, error: vErr } = await supabase
         .from("volunteers")
         .select("id, points")
@@ -196,38 +193,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (vErr) throw vErr;
       if (!vRow?.id) return bad(res, 404, "volunteer not found");
 
-      const used = Math.max(0, Number(reqRow.points_used ?? 0));
+      const used = Number(reqRow.points_used ?? 0);
       const currentPoints = Number(vRow.points ?? 0);
       if (currentPoints < used) return bad(res, 400, `points not enough (have=${currentPoints}, need=${used})`);
 
-      // ✅ update request first
-      await safeUpdateRequestStatus(supabase, request_id, "APPROVED", note || "Approved by admin");
+      // update sequence
+      await safeUpdateRequestStatus(supabase, request_id, {
+        status: "APPROVED",
+        admin_note: note || "Approved by admin",
+      });
 
-      // ✅ deduct stock
       const { error: updStockErr } = await supabase
         .from("rewards")
         .update({ stock: stock - qty })
         .eq("id", reqRow.reward_id);
       if (updStockErr) throw updStockErr;
 
-      // ✅ deduct volunteer points (กันติดลบ)
-      const afterPoints = currentPoints - used;
       const { error: updPointsErr } = await supabase
         .from("volunteers")
-        .update({ points: afterPoints })
+        .update({ points: currentPoints - used })
         .eq("id", vRow.id);
       if (updPointsErr) throw updPointsErr;
 
-      // ✅ log: REDEEM ต้องเป็น "ลบ" เพื่อให้หน้า Profile/History ไม่โชว์ +used
+      // ✅ log ให้เป็น “แต้มออก” (Redeem = จ่ายแต้ม)
       await supabase.from("point_transactions").insert({
-        from_volunteer_id: null,
-        to_volunteer_id: vRow.id,
-        amount: -used, // ⭐ สำคัญมาก
+        from_volunteer_id: vRow.id,
+        to_volunteer_id: null,
+        amount: used,
         type: "redeem",
         note: note || `redeem ${reqRow.reward_id} x${qty}`,
       });
 
-      return ok(res, { request_id, status: "APPROVED", deducted: used, stock_after: stock - qty, points_after: afterPoints });
+      return ok(res, {
+        result: { request_id, status: "APPROVED", deducted: used, stock_after: stock - qty },
+      });
     }
 
     return bad(res, 405, "Method not allowed");
