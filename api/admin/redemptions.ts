@@ -11,7 +11,9 @@ const SERVICE_ROLE_KEY =
 function getAdminClient() {
   if (!SUPABASE_URL) throw new Error("Missing env: SUPABASE_URL");
   if (!SERVICE_ROLE_KEY) throw new Error("Missing env: SUPABASE_SERVICE_ROLE_KEY");
-  return createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+  return createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+    auth: { persistSession: false },
+  });
 }
 
 const ok = (res: VercelResponse, data: any) => res.status(200).json({ ok: true, data });
@@ -24,10 +26,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const supabase = getAdminClient();
 
+    // =========================
+    // GET: /api/admin/redemptions?status=PENDING&search=...
+    // =========================
     if (req.method === "GET") {
       const status = asUpper(req.query.status ?? "PENDING");
       const search = String(req.query.search ?? "").trim().toLowerCase();
 
+      // 1) ดึง requests ก่อน (ไม่ join)
       const { data: reqRows, error: reqErr } = await supabase
         .from("redemption_requests")
         .select("id, volunteer_id, reward_id, reward_title, qty, points_used, status, created_at")
@@ -47,14 +53,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         new Set(requests.map((r: any) => String(r.volunteer_id ?? "").trim()).filter(Boolean))
       );
 
-      // ✅ rewards ของคุณใช้ title และ "ไม่มี cost" → ไม่ select cost
+      // 2) ดึง rewards (schema ของคุณ: title, stock, image_url)
       const { data: rewardRows, error: rewardErr } = await supabase
         .from("rewards")
-.select("id, title, stock, image_url")
+        .select("id, title, stock, image_url")
         .in("id", rewardIds);
 
       if (rewardErr) throw rewardErr;
 
+      // 3) ดึง volunteers (schema: id, volunteer_code, name, branch, points)
       const { data: volRows, error: volErr } = await supabase
         .from("volunteers")
         .select("id, volunteer_code, name, branch, points")
@@ -68,6 +75,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const volMap = new Map<string, any>();
       for (const v of volRows ?? []) volMap.set(String(v.id), v);
 
+      // 4) ประกบข้อมูลเป็น shape ที่หน้า Admin ใช้
       let rows = requests.map((r: any) => {
         const reward = rewardMap.get(String(r.reward_id ?? "")) ?? null;
         const vol = volMap.get(String(r.volunteer_id ?? "")) ?? null;
@@ -89,12 +97,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
           reward_id: r.reward_id,
           reward_title: rewardTitle,
-          reward_cost: 0, // ✅ ไม่มี cost ใน schema ของคุณ
-          reward_stock: typeof reward?.stock === "number" ? reward.stock : null,
+          reward_cost: 0, // schema ของคุณไม่มี cost
+          reward_stock: typeof reward?.stock === "number" ? reward.stock : Number(reward?.stock ?? 0),
           reward_image_url: rewardImage,
         };
       });
 
+      // 5) search filter
       if (search) {
         rows = rows.filter((x: any) => {
           return (
@@ -108,7 +117,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return ok(res, rows);
     }
 
-    // POST ยังใช้ points_used จาก redemption_requests เป็นหลัก → ไม่ต้องพึ่ง rewards.cost
+    // =========================
+    // POST: { action:"approve"|"reject", request_id, note? }
+    // =========================
     if (req.method === "POST") {
       const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
       const action = String(body?.action ?? "").toLowerCase();
@@ -139,6 +150,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return ok(res, { request_id, status: "REJECTED" });
       }
 
+      // approve: check stock
       const { data: rewardRow, error: rewardErr } = await supabase
         .from("rewards")
         .select("id, stock")
@@ -152,6 +164,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const stock = Number(rewardRow.stock ?? 0);
       if (stock < qty) return bad(res, 400, `stock not enough (stock=${stock}, qty=${qty})`);
 
+      // load volunteer by volunteer_id
       const { data: vRow, error: vErr } = await supabase
         .from("volunteers")
         .select("id, points")
@@ -165,6 +178,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const currentPoints = Number(vRow.points ?? 0);
       if (currentPoints < used) return bad(res, 400, `points not enough (have=${currentPoints}, need=${used})`);
 
+      // update sequence
       const { error: updReqErr } = await supabase
         .from("redemption_requests")
         .update({ status: "APPROVED", admin_note: note || "Approved by admin" })
@@ -183,6 +197,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .eq("id", vRow.id);
       if (updPointsErr) throw updPointsErr;
 
+      // log
       await supabase.from("point_transactions").insert({
         from_volunteer_id: null,
         to_volunteer_id: vRow.id,
@@ -197,6 +212,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return bad(res, 405, "Method not allowed");
   } catch (e: any) {
     console.error("[api/admin/redemptions] error:", e);
-    return bad(res, 500, e?.message || "Internal Server Error");
+    return bad(res, 500, e?.message || "Internal Server Error", {
+      hint:
+        "Check env SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY and schema: redemption_requests(volunteer_id,reward_id,points_used), rewards(title,stock,image_url), volunteers(id,volunteer_code,name,branch,points)",
+    });
   }
 }
