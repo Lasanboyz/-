@@ -1,6 +1,18 @@
 // api/admin/redemptions.ts
-import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createClient } from "@supabase/supabase-js";
+
+// ✅ ไม่ใช้ @vercel/node เพื่อกัน build พัง
+type VercelRequest = {
+  method?: string;
+  query?: Record<string, any>;
+  body?: any;
+  headers?: Record<string, any>;
+};
+
+type VercelResponse = {
+  status: (code: number) => VercelResponse;
+  json: (data: any) => void;
+};
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const SERVICE_ROLE_KEY =
@@ -16,36 +28,11 @@ function getAdminClient() {
   });
 }
 
-const ok = (res: VercelResponse, payload: any) => res.status(200).json({ ok: true, ...payload });
+const ok = (res: VercelResponse, data: any) => res.status(200).json({ ok: true, data });
 const bad = (res: VercelResponse, status: number, error: string, extra?: any) =>
   res.status(status).json({ ok: false, error, ...(extra ? { extra } : {}) });
 
 const asUpper = (v: any) => String(v ?? "").trim().toUpperCase();
-
-async function safeUpdateRequestStatus(
-  supabase: ReturnType<typeof getAdminClient>,
-  requestId: string,
-  patch: Record<string, any>
-) {
-  // บางโปรเจกต์ยังไม่มี column admin_note → fallback อัปเดตแบบไม่มี admin_note
-  const { error } = await supabase.from("redemption_requests").update(patch).eq("id", requestId);
-  if (!error) return;
-
-  const msg = String((error as any)?.message ?? "");
-  const code = String((error as any)?.code ?? "");
-
-  // เผื่อ schema cache / column missing
-  const looksLikeMissingColumn =
-    msg.toLowerCase().includes("admin_note") ||
-    msg.toLowerCase().includes("column") ||
-    code === "42703";
-
-  if (!looksLikeMissingColumn || !("admin_note" in patch)) throw error;
-
-  const { admin_note, ...rest } = patch;
-  const { error: error2 } = await supabase.from("redemption_requests").update(rest).eq("id", requestId);
-  if (error2) throw error2;
-}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
@@ -53,11 +40,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // =========================
     // GET: /api/admin/redemptions?status=PENDING&search=...
-    // คืนรูปแบบ: { ok:true, rows:[...] }
     // =========================
     if (req.method === "GET") {
-      const status = asUpper(req.query.status ?? "PENDING");
-      const search = String(req.query.search ?? "").trim().toLowerCase();
+      const status = asUpper(req.query?.status ?? "PENDING");
+      const search = String(req.query?.search ?? "").trim().toLowerCase();
 
       const { data: reqRows, error: reqErr } = await supabase
         .from("redemption_requests")
@@ -69,7 +55,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (reqErr) throw reqErr;
 
       const requests = (reqRows ?? []).filter((r: any) => r?.id);
-      if (requests.length === 0) return ok(res, { rows: [] });
+      if (requests.length === 0) return ok(res, []);
 
       const rewardIds = Array.from(
         new Set(requests.map((r: any) => String(r.reward_id ?? "").trim()).filter(Boolean))
@@ -119,6 +105,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
           reward_id: r.reward_id,
           reward_title: rewardTitle,
+          reward_cost: 0,
           reward_stock: typeof reward?.stock === "number" ? reward.stock : Number(reward?.stock ?? 0),
           reward_image_url: rewardImage,
         };
@@ -134,12 +121,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
       }
 
-      return ok(res, { rows });
+      return ok(res, rows);
     }
 
     // =========================
     // POST: { action:"approve"|"reject", request_id, note? }
-    // คืนรูปแบบ: { ok:true, result:{...} }
     // =========================
     if (req.method === "POST") {
       const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
@@ -162,11 +148,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return bad(res, 400, `request is not PENDING (current=${reqRow.status})`);
 
       if (action === "reject") {
-        await safeUpdateRequestStatus(supabase, request_id, {
-          status: "REJECTED",
-          admin_note: note || "Rejected by admin",
-        });
-        return ok(res, { result: { request_id, status: "REJECTED" } });
+        const { error: updErr } = await supabase
+          .from("redemption_requests")
+          .update({ status: "REJECTED", admin_note: note || "Rejected by admin" })
+          .eq("id", request_id);
+
+        if (updErr) throw updErr;
+        return ok(res, { request_id, status: "REJECTED" });
       }
 
       // approve: check stock
@@ -197,11 +185,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const currentPoints = Number(vRow.points ?? 0);
       if (currentPoints < used) return bad(res, 400, `points not enough (have=${currentPoints}, need=${used})`);
 
-      // update sequence
-      await safeUpdateRequestStatus(supabase, request_id, {
-        status: "APPROVED",
-        admin_note: note || "Approved by admin",
-      });
+      const { error: updReqErr } = await supabase
+        .from("redemption_requests")
+        .update({ status: "APPROVED", admin_note: note || "Approved by admin" })
+        .eq("id", request_id);
+      if (updReqErr) throw updReqErr;
 
       const { error: updStockErr } = await supabase
         .from("rewards")
@@ -215,18 +203,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .eq("id", vRow.id);
       if (updPointsErr) throw updPointsErr;
 
-      // ✅ log ให้เป็น “แต้มออก” (Redeem = จ่ายแต้ม)
       await supabase.from("point_transactions").insert({
-        from_volunteer_id: vRow.id,
-        to_volunteer_id: null,
+        from_volunteer_id: null,
+        to_volunteer_id: vRow.id,
         amount: used,
-        type: "redeem",
+        type: "deduct", // ✅ แนะนำใช้ deduct (กันชน enum/constraint)
         note: note || `redeem ${reqRow.reward_id} x${qty}`,
       });
 
-      return ok(res, {
-        result: { request_id, status: "APPROVED", deducted: used, stock_after: stock - qty },
-      });
+      return ok(res, { request_id, status: "APPROVED", deducted: used, stock_after: stock - qty });
     }
 
     return bad(res, 405, "Method not allowed");
