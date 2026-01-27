@@ -1,17 +1,64 @@
+// pages/Rewards.tsx
 import React, { useEffect, useMemo, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, CheckCircle, Phone, X } from "lucide-react";
-import { dataService } from "../services/dataService";
-import { Volunteer, Reward, RedemptionRequest } from "../types";
+import { useNavigate } from "react-router-dom";
+import { ArrowLeft, CheckCircle, Phone, X, Loader2 } from "lucide-react";
+
+type AuthVolunteer = {
+  id: string;
+  volunteer_code: string;
+  name: string;
+  branch: string;
+  role?: string | null;
+  points?: number | null;
+};
+
+type ApiReward = {
+  id: string;
+  title: string;
+  description?: string | null;
+  cost_points: number;
+  stock: number;
+  image_url?: string | null;
+  is_active?: boolean | null;
+  sort_order?: number | null;
+};
+
+type RewardUI = {
+  id: string;
+  name: string;
+  description?: string | null;
+  cost: number;
+  stock: number;
+  imageUrl: string;
+};
+
+type PendingReq = {
+  id: string;
+  reward_id: string;
+  reward_title?: string | null;
+  qty?: number | null;
+  status: string;
+  created_at: string;
+};
 
 export const Rewards: React.FC = () => {
-  const { volunteerId } = useParams<{ volunteerId: string }>();
   const navigate = useNavigate();
 
-  const [volunteer, setVolunteer] = useState<Volunteer | null>(null);
-  const [rewards, setRewards] = useState<Reward[]>([]);
-  const [currentPoints, setCurrentPoints] = useState(0);
-  const [pendingRequests, setPendingRequests] = useState<RedemptionRequest[]>([]);
+  const [me, setMe] = useState<AuthVolunteer | null>(() => {
+    try {
+      const raw = localStorage.getItem("auth_volunteer");
+      return raw ? (JSON.parse(raw) as AuthVolunteer) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const token = useMemo(() => localStorage.getItem("auth_token") || "", []);
+
+  const [rewards, setRewards] = useState<RewardUI[]>([]);
+  const [currentPoints, setCurrentPoints] = useState<number>(() => Number(me?.points ?? 0));
+
+  const [pendingRequests, setPendingRequests] = useState<PendingReq[]>([]);
   const [successMsg, setSuccessMsg] = useState("");
 
   // Loading / error UI state
@@ -19,12 +66,24 @@ export const Rewards: React.FC = () => {
   const [loadError, setLoadError] = useState("");
 
   // Modal State
-  const [selectedReward, setSelectedReward] = useState<Reward | null>(null);
+  const [selectedReward, setSelectedReward] = useState<RewardUI | null>(null);
   const [phoneNumber, setPhoneNumber] = useState("");
+  const [redeemLoading, setRedeemLoading] = useState(false);
 
-  // ✅ helper: normalize code
-  const normalize = (v: any) => String(v ?? "").trim();
+  const normalizePhone = (s: string) => s.replace(/\s+/g, "").trim();
 
+  // -------------------------
+  // Guard: must login
+  // -------------------------
+  useEffect(() => {
+    if (!token || !me?.id) {
+      navigate("/", { replace: true });
+    }
+  }, [token, me?.id, navigate]);
+
+  // -------------------------
+  // Load rewards + pending
+  // -------------------------
   useEffect(() => {
     let cancelled = false;
 
@@ -33,62 +92,51 @@ export const Rewards: React.FC = () => {
         setPageLoading(true);
         setLoadError("");
 
-        if (!volunteerId) {
-          if (!cancelled) setLoadError("ไม่พบรหัสผู้ใช้งานในลิงก์ กรุณากลับไปค้นหาใหม่");
-          return;
-        }
-
-        // ✅ คง dataService เดิมทั้งหมด แค่ทำให้หา volunteer เจอจากหลาย field
-        const allVols = dataService.getVolunteers();
-
-        const v = allVols.find((i: any) => {
-          const pid = normalize(volunteerId);
-
-          const candidates = [
-            i?.id,
-            i?.empId,
-            i?.employeeId,
-            i?.employee_id,
-            i?.volunteerId,
-            i?.volunteer_id,
-            i?.volunteerCode,
-            i?.volunteer_code,
-            i?.code,
-            i?.staffCode,
-            i?.staff_code,
-          ].map(normalize);
-
-          return candidates.includes(pid);
+        // 1) rewards list
+        const r1 = await fetch("/api/rewards/list", {
+          method: "GET",
+          headers: { "Content-Type": "application/json" },
         });
 
-        // โหลดรายการของรางวัลไว้ก่อน (ต่อให้ไม่เจอ volunteer ก็ยังให้หน้าไม่โล่ง)
-        if (!cancelled) {
-          setRewards(dataService.getRewards());
-        }
+        const d1 = await r1.json().catch(() => ({}));
+        if (!r1.ok) throw new Error(d1?.error || "โหลดรายการของรางวัลไม่สำเร็จ");
 
-        if (!v) {
-          if (!cancelled) {
-            setVolunteer(null);
-            setPendingRequests([]);
-            setCurrentPoints(0);
-            setLoadError("ไม่พบรหัสผู้ใช้งานในลิงก์ กรุณากลับไปค้นหาใหม่");
+        const mapped: RewardUI[] = (d1?.rewards || []).map((x: ApiReward) => ({
+          id: x.id,
+          name: x.title,
+          description: x.description ?? null,
+          cost: Number(x.cost_points ?? 0),
+          stock: Number(x.stock ?? 0),
+          imageUrl: x.image_url || "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=1200&auto=format&fit=crop",
+        }));
+
+        // 2) pending requests (ถ้ามี endpoint นี้)
+        let pending: PendingReq[] = [];
+        try {
+          const r2 = await fetch("/api/rewards/myRequests", {
+            method: "GET",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+          });
+
+          const d2 = await r2.json().catch(() => ({}));
+          if (r2.ok) {
+            pending = (d2?.requests || []).filter((x: PendingReq) => x.status === "PENDING");
           }
-          return;
+        } catch {
+          // ถ้าไม่มี endpoint นี้ก็ไม่เป็นไร แค่ไม่โชว์ pending list
+          pending = [];
         }
 
         if (cancelled) return;
 
-        // ✅ ตั้ง volunteer
-        setVolunteer(v);
+        setRewards(mapped);
+        setPendingRequests(pending);
 
-        // ✅ แต้ม: ใช้ v.id เป็นหลักเหมือนเดิม (เพราะ dataService น่าจะใช้ id)
-        setCurrentPoints(dataService.getVolunteerPoints(v.id));
-
-        // ✅ pending requests: ใช้ v.id เหมือนเดิม
-        const reqs = dataService
-          .getRequests()
-          .filter((r) => r.volunteerId === v.id && r.status === "PENDING");
-        setPendingRequests(reqs);
+        // แต้มจาก localStorage (me.points)
+        setCurrentPoints(Number(me?.points ?? 0));
       } catch (e: any) {
         if (!cancelled) setLoadError(e?.message ?? "โหลดข้อมูลไม่สำเร็จ");
       } finally {
@@ -100,49 +148,130 @@ export const Rewards: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [volunteerId]);
+  }, [token, me?.points]);
 
+  // pending map: ป้องกันแลกซ้ำ “ของชิ้นเดียวกัน” ระหว่างรออนุมัติ
   const pendingMap = useMemo(() => {
     const set = new Set<string>();
-    pendingRequests.forEach((p) => set.add(p.rewardId));
+    pendingRequests.forEach((p) => set.add(p.reward_id));
     return set;
   }, [pendingRequests]);
 
-  const initiateRedeem = (reward: Reward) => {
+  const initiateRedeem = (reward: RewardUI) => {
+    if (reward.stock <= 0) {
+      alert("ของรางวัลหมด");
+      return;
+    }
     if (currentPoints < reward.cost) {
       alert("คะแนนของคุณไม่เพียงพอ");
       return;
     }
+    if (pendingMap.has(reward.id)) {
+      alert("ของรางวัลชิ้นนี้มีคำขอค้างอยู่แล้ว");
+      return;
+    }
+
     setSelectedReward(reward);
     setPhoneNumber("");
   };
 
-  const confirmRedeem = (e: React.FormEvent) => {
+  const confirmRedeem = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!volunteer || !selectedReward) return;
+    if (!selectedReward) return;
 
-    if (!phoneNumber.trim()) {
+    const phone = normalizePhone(phoneNumber);
+    if (!phone) {
       alert("กรุณากรอกเบอร์โทรศัพท์");
       return;
     }
 
-    const newReq: RedemptionRequest = {
-      id: "req_" + Date.now(),
-      volunteerId: volunteer.id,
-      rewardId: selectedReward.id,
-      status: "PENDING",
-      requestDate: new Date().toISOString(),
-      phoneNumber: phoneNumber.trim(),
-    };
+    if (redeemLoading) return;
+    setRedeemLoading(true);
 
-    // ✅ คงเดิม
-    dataService.addRequest(newReq);
-    setPendingRequests([...pendingRequests, newReq]);
-    setSuccessMsg(`ส่งคำขอแลก "${selectedReward.name}" แล้ว!`);
+    try {
+      const r = await fetch("/api/rewards/redeem", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          reward_id: selectedReward.id,
+          qty: 1,
+          phone_number: phone, // server จะใช้หรือไม่ใช้ก็ได้
+        }),
+      });
 
-    setSelectedReward(null);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-    setTimeout(() => setSuccessMsg(""), 4000);
+      const data = await r.json().catch(() => ({}));
+
+      if (!r.ok) {
+        throw new Error(data?.error || "แลกของรางวัลไม่สำเร็จ");
+      }
+
+      // อัปเดตแต้มใหม่ (จาก API)
+      const newPoints = Number(data?.new_points ?? currentPoints);
+      setCurrentPoints(newPoints);
+
+      // อัปเดต localStorage auth_volunteer ให้หน้าอื่นๆ sync
+      try {
+        const raw = localStorage.getItem("auth_volunteer");
+        const v = raw ? (JSON.parse(raw) as AuthVolunteer) : null;
+        if (v) {
+          const next = { ...v, points: newPoints };
+          localStorage.setItem("auth_volunteer", JSON.stringify(next));
+          setMe(next);
+        }
+      } catch {
+        // ignore
+      }
+
+      // เพิ่ม pending list ทันที (ให้ UX เห็นว่า “ส่งคำขอแล้ว”)
+      const reqId = data?.request?.id || data?.request_id || "req_" + Date.now();
+      const createdAt = data?.request?.created_at || new Date().toISOString();
+
+      setPendingRequests((prev) => [
+        {
+          id: reqId,
+          reward_id: selectedReward.id,
+          reward_title: selectedReward.name,
+          status: "PENDING",
+          created_at: createdAt,
+        },
+        ...prev,
+      ]);
+
+      setSuccessMsg(`ส่งคำขอแลก "${selectedReward.name}" แล้ว!`);
+      setSelectedReward(null);
+
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      window.setTimeout(() => setSuccessMsg(""), 4000);
+
+      // refresh rewards stock (optional)
+      // โหลดใหม่แบบเบาๆ
+      try {
+        const r1 = await fetch("/api/rewards/list");
+        const d1 = await r1.json().catch(() => ({}));
+        if (r1.ok) {
+          const mapped: RewardUI[] = (d1?.rewards || []).map((x: ApiReward) => ({
+            id: x.id,
+            name: x.title,
+            description: x.description ?? null,
+            cost: Number(x.cost_points ?? 0),
+            stock: Number(x.stock ?? 0),
+            imageUrl:
+              x.image_url ||
+              "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=1200&auto=format&fit=crop",
+          }));
+          setRewards(mapped);
+        }
+      } catch {
+        // ignore
+      }
+    } catch (err: any) {
+      alert(err?.message || "เกิดข้อผิดพลาด กรุณาลองใหม่");
+    } finally {
+      setRedeemLoading(false);
+    }
   };
 
   // =========================
@@ -151,7 +280,8 @@ export const Rewards: React.FC = () => {
   if (pageLoading) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center">
-        <div className="text-center space-y-2">
+        <div className="text-center space-y-3">
+          <Loader2 className="animate-spin inline-block" />
           <div className="text-gray-700 font-semibold">Loading...</div>
           <div className="text-gray-400 text-sm">กำลังดึงข้อมูลของรางวัล</div>
         </div>
@@ -170,18 +300,8 @@ export const Rewards: React.FC = () => {
             onClick={() => navigate("/")}
             className="inline-flex items-center justify-center gap-2 w-full bg-primary text-white font-bold py-3 rounded-xl hover:bg-pink-600 transition"
           >
-            <ArrowLeft size={18} /> กลับไปค้นหาใหม่
+            <ArrowLeft size={18} /> กลับไปหน้าแรก
           </button>
-
-          {/* ให้ยังเห็นของรางวัลได้ (ถ้ามี) */}
-          {rewards.length > 0 && (
-            <button
-              onClick={() => setLoadError("")}
-              className="w-full bg-white border border-gray-200 text-gray-700 font-bold py-3 rounded-xl hover:bg-gray-50 transition"
-            >
-              ดูของรางวัล (แบบไม่ผูกผู้ใช้)
-            </button>
-          )}
         </div>
       </div>
     );
@@ -220,12 +340,7 @@ export const Rewards: React.FC = () => {
 
           <div className="shrink-0 text-right">
             <div className="text-[11px] text-gray-500">ผู้ใช้งาน</div>
-            <div className="font-bold text-gray-800">
-              {(volunteer as any)?.empId ??
-                (volunteer as any)?.volunteer_code ??
-                (volunteer as any)?.code ??
-                "-"}
-            </div>
+            <div className="font-bold text-gray-800">{me?.volunteer_code ?? "-"}</div>
           </div>
         </div>
       </div>
@@ -253,15 +368,16 @@ export const Rewards: React.FC = () => {
 
           <ul className="text-sm space-y-2 mt-3">
             {pendingRequests.map((req) => {
-              const r = rewards.find((rw) => rw.id === req.rewardId);
+              const r = rewards.find((rw) => rw.id === req.reward_id);
+              const name = r?.name || req.reward_title || "Unknown Reward";
               return (
                 <li
                   key={req.id}
                   className="text-amber-900 flex items-center justify-between gap-3 bg-white/60 rounded-xl px-3 py-2"
                 >
-                  <span className="truncate">• {r?.name || "Unknown Reward"}</span>
+                  <span className="truncate">• {name}</span>
                   <span className="text-xs opacity-70 shrink-0">
-                    {new Date(req.requestDate).toLocaleDateString("th-TH")}
+                    {new Date(req.created_at).toLocaleDateString("th-TH")}
                   </span>
                 </li>
               );
@@ -298,7 +414,12 @@ export const Rewards: React.FC = () => {
                 className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden flex flex-col hover:shadow-md transition"
               >
                 <div className="h-48 bg-gray-100 relative">
-                  <img src={reward.imageUrl} alt={reward.name} className="w-full h-full object-cover" loading="lazy" />
+                  <img
+                    src={reward.imageUrl}
+                    alt={reward.name}
+                    className="w-full h-full object-cover"
+                    loading="lazy"
+                  />
 
                   <div className="absolute top-3 left-3 flex gap-2">
                     {isPending && (
@@ -321,6 +442,9 @@ export const Rewards: React.FC = () => {
                 <div className="p-4 flex-grow flex flex-col justify-between">
                   <div>
                     <h3 className="font-extrabold text-gray-900 text-lg leading-snug">{reward.name}</h3>
+                    {reward.description && (
+                      <p className="mt-1 text-xs text-gray-500 line-clamp-2">{reward.description}</p>
+                    )}
 
                     <div className="mt-2 flex items-center justify-between">
                       <div className="text-pink-600 font-extrabold text-xl">
@@ -357,14 +481,18 @@ export const Rewards: React.FC = () => {
       {selectedReward && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl relative animate-fade-in-up border border-gray-100">
-            <button onClick={() => setSelectedReward(null)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
+            <button
+              onClick={() => setSelectedReward(null)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+            >
               <X size={24} />
             </button>
 
             <div className="mb-5">
               <h3 className="text-xl font-extrabold text-gray-900 mb-1">ยืนยันการแลกรางวัล</h3>
               <p className="text-gray-500 text-sm">
-                “{selectedReward.name}” ใช้ <span className="font-bold text-pink-600">{selectedReward.cost}</span> คะแนน
+                “{selectedReward.name}” ใช้{" "}
+                <span className="font-bold text-pink-600">{selectedReward.cost}</span> คะแนน
               </p>
             </div>
 
@@ -386,9 +514,10 @@ export const Rewards: React.FC = () => {
 
               <button
                 type="submit"
-                className="w-full bg-primary text-white font-extrabold py-3.5 rounded-2xl hover:bg-pink-600 shadow-lg shadow-pink-200 transition"
+                disabled={redeemLoading}
+                className="w-full bg-primary text-white font-extrabold py-3.5 rounded-2xl hover:bg-pink-600 shadow-lg shadow-pink-200 transition disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                ยืนยันการแลก
+                {redeemLoading ? "กำลังส่งคำขอ..." : "ยืนยันการแลก"}
               </button>
 
               <button
