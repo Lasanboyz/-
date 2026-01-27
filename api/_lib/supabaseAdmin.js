@@ -1,4 +1,4 @@
-// api/_utils/supabaseAdmin.js
+// api/_lib/supabaseAdmin.js
 import { createClient } from "@supabase/supabase-js";
 
 let _adminClient;
