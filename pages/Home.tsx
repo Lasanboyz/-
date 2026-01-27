@@ -1,10 +1,11 @@
+// pages/Home.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, User, Gift, Trophy, Loader2 } from "lucide-react";
+import { Search, User, Gift, Trophy, Loader2, LogOut } from "lucide-react";
 import { fetchVolunteerByCode, mapVolunteerRowToVolunteer } from "../services/dataService";
-import type { Volunteer } from "../types";
 import PinLogin from "../components/PinLogin";
 
+// ✅ type สำหรับข้อมูลที่ได้จาก /api/auth/loginPin
 type AuthVolunteer = {
   id: string;
   volunteer_code: string;
@@ -12,6 +13,13 @@ type AuthVolunteer = {
   branch: string;
   role?: string | null;
   points?: number | null;
+};
+
+// ✅ กันชน: ไม่ผูกกับ types/Volunteer ที่อาจไม่ตรง schema ในโปรเจกต์
+type VolunteerLite = {
+  empId: string;
+  type: string;
+  [k: string]: any;
 };
 
 export const Home: React.FC = () => {
@@ -29,21 +37,32 @@ export const Home: React.FC = () => {
   });
 
   const [searchTerm, setSearchTerm] = useState("");
-  const [result, setResult] = useState<Volunteer | null>(null);
+  const [result, setResult] = useState<VolunteerLite | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [notFound, setNotFound] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // UI toast (ไม่ยุ่ง Supabase)
+  // UI toast
   const [toast, setToast] = useState<string>("");
-
-  // แสดงอิโมจิหัวใจ ถ้ารูปโหลดไม่ได้
   const [logoFailed, setLogoFailed] = useState(false);
 
-  // ✅ Debounce (กันยิง Supabase ทุกตัวอักษร) — คง logic เดิม
+  const trimmed = useMemo(() => searchTerm.trim(), [searchTerm]);
+
+  // ✅ logout
+  const logout = () => {
+    localStorage.removeItem("auth_token");
+    localStorage.removeItem("auth_volunteer");
+    setMe(null);
+    setSearchTerm("");
+    setResult(null);
+    setLoading(false);
+    setNotFound(false);
+    setErrorMsg(null);
+  };
+
+  // ✅ Debounce search (ยิง supabase เมื่อ login แล้วเท่านั้น)
   useEffect(() => {
-    // ✅ ยังไม่ login → ไม่ต้องค้นหา/ไม่ยิง supabase
     if (!me) return;
 
     const term = searchTerm.trim();
@@ -64,11 +83,9 @@ export const Home: React.FC = () => {
         setErrorMsg(null);
         setNotFound(false);
 
-        // ✅ normalize search (กันเคสผู้ใช้พิมพ์เว้นวรรค/ตัวเล็กใหญ่)
         const normalized = term.replace(/\s+/g, "").toUpperCase();
 
         const data = await fetchVolunteerByCode(normalized);
-
         if (cancelled) return;
 
         if (!data) {
@@ -77,10 +94,17 @@ export const Home: React.FC = () => {
           return;
         }
 
-        // ✅ ใช้ helper จาก dataService.ts (กัน schema เปลี่ยน)
-        const mapped = mapVolunteerRowToVolunteer(data);
+        // ✅ map จาก dataService (กัน schema เปลี่ยน)
+        const mapped = mapVolunteerRowToVolunteer(data) as any;
 
-        setResult(mapped);
+        // ✅ กันพัง ถ้า mapped ไม่มี field ที่หน้า Home ใช้
+        const lite: VolunteerLite = {
+          empId: mapped.empId ?? mapped.volunteer_code ?? normalized,
+          type: mapped.type ?? mapped.branch ?? "-",
+          ...mapped,
+        };
+
+        setResult(lite);
         setNotFound(false);
       } catch (err: any) {
         if (cancelled) return;
@@ -125,17 +149,32 @@ export const Home: React.FC = () => {
     searchInputRef.current?.focus();
   };
 
-  const trimmed = useMemo(() => searchTerm.trim(), [searchTerm]);
-
-  // ✅ ถ้ายังไม่ login ให้แสดงหน้าใส่รหัส + PIN ก่อน
+  // ✅ ถ้ายังไม่ login → ให้แสดง PinLogin ก่อน
   if (!me) {
-    return <PinLogin onSuccess={(v: any) => setMe(v)} />;
+    return <PinLogin onSuccess={(v: any) => setMe(v as AuthVolunteer)} />;
   }
 
   return (
     <div className="relative">
       {/* soft background */}
       <div className="absolute inset-0 -z-10 bg-gradient-to-b from-pink-50 via-rose-50/40 to-white" />
+
+      {/* top bar (mini) */}
+      <div className="w-full max-w-5xl mx-auto px-4 pt-4">
+        <div className="flex items-center justify-between">
+          <div className="text-sm text-gray-600">
+            สวัสดี, <span className="font-semibold text-gray-800">{me.name}</span>{" "}
+            <span className="text-gray-400">({me.branch})</span>
+          </div>
+          <button
+            onClick={logout}
+            className="inline-flex items-center gap-2 text-sm px-3 py-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 transition"
+          >
+            <LogOut size={16} />
+            ออกจากระบบ
+          </button>
+        </div>
+      </div>
 
       {/* toast */}
       {toast && (
@@ -163,8 +202,6 @@ export const Home: React.FC = () => {
                 <div className="text-[64px] leading-none">💗</div>
               )}
             </div>
-
-            {/* small glow */}
             <div className="absolute -inset-6 -z-10 bg-pink-200/20 blur-2xl rounded-full" />
           </div>
 
@@ -200,7 +237,6 @@ export const Home: React.FC = () => {
               </div>
             </div>
 
-            {/* Right icon (loading / clear) */}
             <div className="absolute right-4 top-1/2 -translate-y-1/2">
               {loading ? (
                 <Loader2 className="animate-spin text-pink-400" size={22} />
