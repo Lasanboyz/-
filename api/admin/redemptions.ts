@@ -20,6 +20,8 @@ const ok = (res: VercelResponse, data: any) => res.status(200).json({ ok: true, 
 const bad = (res: VercelResponse, status: number, error: string, extra?: any) =>
   res.status(status).json({ ok: false, error, ...(extra ? { extra } : {}) });
 
+const asUpper = (v: any) => String(v ?? "").trim().toUpperCase();
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const supabase = getAdminClient();
@@ -27,28 +29,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // 1) GET /api/admin/redemptions?status=PENDING&search=...
     // 2) POST { action:"approve"|"reject", request_id, note? }
     if (req.method === "GET") {
-      const status = String(req.query.status ?? "PENDING").toUpperCase();
-      const search = String(req.query.search ?? "").trim();
+      const status = asUpper(req.query.status ?? "PENDING");
+      const search = String(req.query.search ?? "").trim().toLowerCase();
 
-      // ✅ 1) ดึง redemption_requests แบบตรง ๆ ไม่ join
+      // ✅ 1) ดึง redemption_requests (ใช้ volunteer_id)
       const { data: reqRows, error: reqErr } = await supabase
         .from("redemption_requests")
-        .select("id, volunteer_code, reward_id, qty, points_used, status, created_at")
+        .select("id, volunteer_id, reward_id, reward_title, qty, points_used, status, created_at")
         .eq("status", status)
         .order("created_at", { ascending: false })
         .limit(200);
 
       if (reqErr) throw reqErr;
 
-      const requests = reqRows ?? [];
+      const requests = (reqRows ?? []).filter((r: any) => r?.id);
       if (requests.length === 0) return ok(res, []);
 
       // ✅ 2) เก็บ key ไปดึง rewards/volunteers ทีเดียว
       const rewardIds = Array.from(
         new Set(requests.map((r: any) => String(r.reward_id ?? "").trim()).filter(Boolean))
       );
-      const volunteerCodes = Array.from(
-        new Set(requests.map((r: any) => String(r.volunteer_code ?? "").trim()).filter(Boolean))
+      const volunteerIds = Array.from(
+        new Set(requests.map((r: any) => String(r.volunteer_id ?? "").trim()).filter(Boolean))
       );
 
       // ✅ 3) ดึง rewards
@@ -59,11 +61,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       if (rewardErr) throw rewardErr;
 
-      // ✅ 4) ดึง volunteers
+      // ✅ 4) ดึง volunteers (ใช้ id)
       const { data: volRows, error: volErr } = await supabase
         .from("volunteers")
-        .select("volunteer_code, name, branch")
-        .in("volunteer_code", volunteerCodes);
+        .select("id, volunteer_code, name, branch, points")
+        .in("id", volunteerIds);
 
       if (volErr) throw volErr;
 
@@ -71,12 +73,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       for (const r of rewardRows ?? []) rewardMap.set(String(r.id), r);
 
       const volMap = new Map<string, any>();
-      for (const v of volRows ?? []) volMap.set(String(v.volunteer_code).trim(), v);
+      for (const v of volRows ?? []) volMap.set(String(v.id), v);
 
       // ✅ 5) ประกบข้อมูล
       let rows = requests.map((r: any) => {
         const reward = rewardMap.get(String(r.reward_id ?? "")) ?? null;
-        const vol = volMap.get(String(r.volunteer_code ?? "").trim()) ?? null;
+        const vol = volMap.get(String(r.volunteer_id ?? "")) ?? null;
+
+        const rewardTitle = reward?.name ?? r.reward_title ?? "";
 
         return {
           request_id: r.id,
@@ -85,26 +89,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           qty: Number(r.qty ?? 1),
           points_used: Number(r.points_used ?? 0),
 
-          volunteer_code: r.volunteer_code,
+          volunteer_id: r.volunteer_id,
+          volunteer_code: vol?.volunteer_code ?? "",
           volunteer_name: vol?.name ?? "",
           volunteer_branch: vol?.branch ?? "",
 
           reward_id: r.reward_id,
-          reward_title: reward?.name ?? "",
+          reward_title: rewardTitle,
           reward_cost: Number(reward?.cost ?? 0),
           reward_stock: typeof reward?.stock === "number" ? reward.stock : null,
           reward_image_url: reward?.image_url ?? "",
         };
       });
 
-      // ✅ 6) search filter
+      // ✅ 6) search filter (code/name/reward)
       if (search) {
-        const s = search.toLowerCase();
         rows = rows.filter((x: any) => {
           return (
-            String(x.volunteer_code ?? "").toLowerCase().includes(s) ||
-            String(x.volunteer_name ?? "").toLowerCase().includes(s) ||
-            String(x.reward_title ?? "").toLowerCase().includes(s)
+            String(x.volunteer_code ?? "").toLowerCase().includes(search) ||
+            String(x.volunteer_name ?? "").toLowerCase().includes(search) ||
+            String(x.reward_title ?? "").toLowerCase().includes(search)
           );
         });
       }
@@ -121,15 +125,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!request_id) return bad(res, 400, "request_id is required");
       if (!["approve", "reject"].includes(action)) return bad(res, 400, "action must be approve|reject");
 
+      // ✅ load request (ใช้ volunteer_id)
       const { data: reqRow, error: reqErr } = await supabase
         .from("redemption_requests")
-        .select("id, volunteer_code, reward_id, qty, points_used, status")
+        .select("id, volunteer_id, reward_id, qty, points_used, status")
         .eq("id", request_id)
         .maybeSingle();
 
       if (reqErr) throw reqErr;
       if (!reqRow?.id) return bad(res, 404, "request not found");
-      if (String(reqRow.status).toUpperCase() !== "PENDING")
+      if (asUpper(reqRow.status) !== "PENDING")
         return bad(res, 400, `request is not PENDING (current=${reqRow.status})`);
 
       if (action === "reject") {
@@ -142,7 +147,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return ok(res, { request_id, status: "REJECTED" });
       }
 
-      // approve
+      // ✅ approve: check stock
       const { data: rewardRow, error: rewardErr } = await supabase
         .from("rewards")
         .select("id, stock")
@@ -156,10 +161,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const stock = Number(rewardRow.stock ?? 0);
       if (stock < qty) return bad(res, 400, `stock not enough (stock=${stock}, qty=${qty})`);
 
+      // ✅ load volunteer by volunteer_id
       const { data: vRow, error: vErr } = await supabase
         .from("volunteers")
-        .select("id, points")
-        .eq("volunteer_code", reqRow.volunteer_code)
+        .select("id, points, volunteer_code")
+        .eq("id", reqRow.volunteer_id)
         .maybeSingle();
 
       if (vErr) throw vErr;
@@ -169,24 +175,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const currentPoints = Number(vRow.points ?? 0);
       if (currentPoints < used) return bad(res, 400, `points not enough (have=${currentPoints}, need=${used})`);
 
+      // ✅ update request status
       const { error: updReqErr } = await supabase
         .from("redemption_requests")
         .update({ status: "APPROVED", admin_note: note || "Approved by admin" })
         .eq("id", request_id);
       if (updReqErr) throw updReqErr;
 
+      // ✅ update stock
       const { error: updStockErr } = await supabase
         .from("rewards")
         .update({ stock: stock - qty })
         .eq("id", reqRow.reward_id);
       if (updStockErr) throw updStockErr;
 
+      // ✅ deduct volunteer points
       const { error: updPointsErr } = await supabase
         .from("volunteers")
         .update({ points: currentPoints - used })
         .eq("id", vRow.id);
       if (updPointsErr) throw updPointsErr;
 
+      // ✅ log (optional)
       await supabase.from("point_transactions").insert({
         from_volunteer_id: null,
         to_volunteer_id: vRow.id,
