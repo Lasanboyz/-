@@ -47,7 +47,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const { data: reqRows, error: reqErr } = await supabase
         .from("redemption_requests")
-        .select("id, volunteer_id, reward_id, reward_title, qty, points_used, status, created_at")
+        .select("id, volunteer_id, reward_id, reward_title, qty, points_used, status, created_at, phone_number")
+
         .eq("status", status)
         .order("created_at", { ascending: false })
         .limit(200);
