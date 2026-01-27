@@ -48,6 +48,8 @@ type AdminRedemptionRow = {
   status: RedemptionStatus;
   created_at: string;
 
+  phone_number?: string | null; // ✅ เพิ่ม
+  
   qty: number;
   points_used: number;
 
@@ -807,6 +809,12 @@ export const Admin: React.FC = () => {
                               </span>
                               {r.volunteer_branch ? <span className="ml-2">({r.volunteer_branch})</span> : null}
                             </div>
+                            {r.phone_number ? (
+  <div className="text-xs text-gray-500 mt-1">
+    เบอร์โทร: <span className="font-bold text-gray-800">{r.phone_number}</span>
+  </div>
+) : null}
+
 
                             <div className="text-xs text-gray-500 mt-1">
                               ใช้แต้ม: <span className="font-bold text-gray-800">{r.points_used}</span>{" "}
