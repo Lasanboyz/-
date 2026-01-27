@@ -109,49 +109,60 @@ export const Profile: React.FC = () => {
     return txs.filter((t) => t.type === "ACTIVITY" && t.thaiYear === year).length;
   };
 
-  // ✅ map point_transactions_view -> Transaction (handle transfer/deduct/adjustment)
-  const mapTxViewToTransaction = (t: TxViewRow, myVolunteerId: string): Transaction => {
-    const txType = String(t.type ?? "transfer").toLowerCase(); // transfer | deduct | adjustment
-    const amountAbs = Math.abs(Number(t.amount ?? 0));
-    const createdAt = t.created_at ?? new Date().toISOString();
-    const thaiYear = toThaiYearFromDate(createdAt);
+// ✅ map point_transactions_view -> Transaction (handle transfer/deduct/adjustment/redeem)
+const mapTxViewToTransaction = (t: TxViewRow, myVolunteerId: string): Transaction => {
+  const txType = String(t.type ?? "transfer").toLowerCase(); // transfer | deduct | adjustment | redeem
+  const amountAbs = Math.abs(Number(t.amount ?? 0));
+  const createdAt = t.created_at ?? new Date().toISOString();
+  const thaiYear = toThaiYearFromDate(createdAt);
 
-    const fromId = t.from_volunteer_id ?? null;
-    const toId = t.to_volunteer_id ?? null;
-    const isOut = fromId && String(fromId) === String(myVolunteerId);
+  const fromId = t.from_volunteer_id ?? null;
+  const toId = t.to_volunteer_id ?? null;
 
-    let signedAmount = amountAbs;
-    if (txType === "transfer") {
-      signedAmount = isOut ? -amountAbs : +amountAbs;
-    } else if (txType === "deduct") {
-      signedAmount = -amountAbs;
-    } else if (txType === "adjustment") {
-      signedAmount = +amountAbs;
-    }
+  // ออก/เข้า สำหรับ transfer (เท่านั้น)
+  const isOut = fromId && String(fromId) === String(myVolunteerId);
 
-    let desc = t.note ?? "-";
-    if (txType === "transfer") {
-      desc = isOut
-        ? `โอนให้ ${t.to_name ?? t.to_volunteer_code ?? "-"}`
-        : `ได้รับจาก ${t.from_name ?? t.from_volunteer_code ?? "-"}`;
-    } else if (txType === "deduct") {
-      desc = `หักแต้ม • ${t.note ?? "admin deduct"}`;
-    } else if (txType === "adjustment") {
-      desc = `ปรับแต้ม • ${t.note ?? "admin give"}`;
-    }
+  let signedAmount = amountAbs;
 
-    return {
-      id: t.id,
-      volunteerId: myVolunteerId,
-      amount: signedAmount,
-      type: txType.toUpperCase(), // "TRANSFER" | "DEDUCT" | "ADJUSTMENT"
-      description: desc,
-      date: createdAt,
-      thaiYear,
-      createdBy: "system",
-      relatedId: isOut ? toId : fromId,
-    } as any;
-  };
+  if (txType === "transfer") {
+    signedAmount = isOut ? -amountAbs : +amountAbs;
+  } else if (txType === "deduct") {
+    signedAmount = -amountAbs;
+  } else if (txType === "adjustment") {
+    signedAmount = +amountAbs;
+  } else if (txType === "redeem") {
+    // ✅ แลกของรางวัล = แต้มออกเสมอ
+    signedAmount = -amountAbs;
+  } else {
+    // เผื่อ type อื่นๆในอนาคต: ถ้า from เป็นเราให้ถือว่าออก
+    if (fromId && String(fromId) === String(myVolunteerId)) signedAmount = -amountAbs;
+  }
+
+  let desc = t.note ?? "-";
+  if (txType === "transfer") {
+    desc = isOut
+      ? `โอนให้ ${t.to_name ?? t.to_volunteer_code ?? "-"}`
+      : `ได้รับจาก ${t.from_name ?? t.from_volunteer_code ?? "-"}`;
+  } else if (txType === "deduct") {
+    desc = `หักแต้ม • ${t.note ?? "admin deduct"}`;
+  } else if (txType === "adjustment") {
+    desc = `ปรับแต้ม • ${t.note ?? "admin give"}`;
+  } else if (txType === "redeem") {
+    desc = `แลกรางวัล • ${t.note ?? "redeem"}`;
+  }
+
+  return {
+    id: t.id,
+    volunteerId: myVolunteerId,
+    amount: signedAmount,
+    type: txType.toUpperCase(), // TRANSFER | DEDUCT | ADJUSTMENT | REDEEM
+    description: desc,
+    date: createdAt,
+    thaiYear,
+    createdBy: "system",
+    relatedId: isOut ? toId : fromId,
+  } as any;
+};
 
   useEffect(() => {
     if (!volunteerCode) {
