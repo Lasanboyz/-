@@ -23,6 +23,7 @@ class DataService {
     const savedReqs = localStorage.getItem("requests_v16");
     if (savedReqs) this.redemptionRequests = JSON.parse(savedReqs);
 
+    // NOTE: ใช้เป็น fallback เฉยๆ (ตอนนี้ฝั่งจริงคุณใช้ rewards table + /api/rewards/* แล้ว)
     this.rewards = [
       {
         id: "r1",
@@ -240,10 +241,7 @@ const deriveThaiYear = (r: ActivityRow): number | undefined => {
  * ✅ KEYSET pagination (created_at + id) — กันซ้ำ/กันหลุด 100%
  * หมดปัญหา .range() แล้วเลขเพี้ยน
  */
-export async function fetchLeaderboardSummary(
-  mode: LeaderboardMode,
-  thaiYear: number
-): Promise<LeaderboardSummaryRow[]> {
+export async function fetchLeaderboardSummary(mode: LeaderboardMode, thaiYear: number): Promise<LeaderboardSummaryRow[]> {
   const PAGE_SIZE = 1000;
 
   const allRows: ActivityRow[] = [];
@@ -263,16 +261,11 @@ export async function fetchLeaderboardSummary(
 
     // ✅ keyset cursor: (created_at > lastCreatedAt) OR (created_at = lastCreatedAt AND id > lastId)
     if (lastCreatedAt && lastId) {
-      q = q.or(
-        `created_at.gt.${lastCreatedAt},and(created_at.eq.${lastCreatedAt},id.gt.${lastId})`
-      );
+      q = q.or(`created_at.gt.${lastCreatedAt},and(created_at.eq.${lastCreatedAt},id.gt.${lastId})`);
     }
 
     // ✅ stable order
-    q = q
-      .order("created_at", { ascending: true })
-      .order("id", { ascending: true })
-      .limit(PAGE_SIZE);
+    q = q.order("created_at", { ascending: true }).order("id", { ascending: true }).limit(PAGE_SIZE);
 
     const { data, error } = await q;
 
@@ -397,10 +390,7 @@ export async function transferPoints(params: {
   if (fromCode === toCode) throw new Error("ห้ามโอนให้รหัสเดียวกัน");
   if (!Number.isFinite(amount) || amount <= 0) throw new Error("จำนวนแต้มต้องมากกว่า 0");
 
-  const [fromV, toV] = await Promise.all([
-    getVolunteerByCodeForPoints(fromCode),
-    getVolunteerByCodeForPoints(toCode),
-  ]);
+  const [fromV, toV] = await Promise.all([getVolunteerByCodeForPoints(fromCode), getVolunteerByCodeForPoints(toCode)]);
 
   if (!fromV) throw new Error(`ไม่พบผู้โอน: ${fromCode}`);
   if (!toV) throw new Error(`ไม่พบผู้รับ: ${toCode}`);
@@ -478,10 +468,7 @@ export async function adminDeductPoints(params: { volunteerCode: string; amount:
   const current = Number(v.points ?? 0);
   if (current < amount) throw new Error(`แต้มไม่พอ (คงเหลือ ${current})`);
 
-  const { error: updErr } = await supabase
-    .from("volunteers")
-    .update({ points: current - amount })
-    .eq("id", v.id);
+  const { error: updErr } = await supabase.from("volunteers").update({ points: current - amount }).eq("id", v.id);
 
   if (updErr) {
     console.error("[Supabase] adminDeductPoints update error:", updErr);
@@ -564,17 +551,14 @@ async function callAdminApi<T>(path: string, body: any): Promise<T> {
     body: JSON.stringify(body),
   });
 
-  const json = await res.json().catch(() => ({}));
+  const json = await res.json().catch(() => ({} as any));
   if (!res.ok) throw new Error(json?.error || `API error ${res.status}`);
-  return json?.data as T;
+
+  // บาง endpoint คืน { ok:true, ... } บาง endpoint คืน { data: ... }
+  return (json?.data ?? json) as T;
 }
 
-export async function createVolunteer(params: {
-  volunteerCode: string;
-  name: string;
-  branch: string;
-  isStaff?: boolean;
-}) {
+export async function createVolunteer(params: { volunteerCode: string; name: string; branch: string; isStaff?: boolean }) {
   const volunteerCode = String(params.volunteerCode ?? "").trim().toUpperCase();
   const name = String(params.name ?? "").trim();
   const branch = String(params.branch ?? "").trim();
@@ -596,7 +580,7 @@ export async function createVolunteer(params: {
 }
 
 // =====================================================
-// Admin functions
+// Admin functions (existing)
 // =====================================================
 export type VolunteerRole = "VOLUNTEER" | "STAFF" | "ADMIN";
 
@@ -661,11 +645,7 @@ export async function adminVoidLatestActivity(params: {
   const nowIso = new Date().toISOString();
   const currentThaiYear = getCurrentThaiYear();
 
-  let q = supabase
-    .from("activity_history")
-    .select("id, activity_date, created_at, thai_year")
-    .eq("volunteer_code", code)
-    .eq("is_void", false);
+  let q = supabase.from("activity_history").select("id, activity_date, created_at, thai_year").eq("volunteer_code", code).eq("is_void", false);
 
   if (params.onlyCurrentThaiYear) q = q.eq("thai_year", currentThaiYear);
 
@@ -714,30 +694,29 @@ export async function adminAddActivityViaApi(params: {
   if (!Number.isFinite(times) || times < 1) throw new Error("times must be >= 1");
   if (!["VOLUNTEER", "ADMIN"].includes(status)) throw new Error("status must be VOLUNTEER|ADMIN");
 
-  return await callAdminApi<{ inserted: number; thai_year: number; volunteer_code: string }>(
-    "/api/admin/addActivity",
-    { volunteer_code, times, activity_date, status }
-  );
+  return await callAdminApi<{ inserted: number; thai_year: number; volunteer_code: string }>("/api/admin/addActivity", {
+    volunteer_code,
+    times,
+    activity_date,
+    status,
+  });
 }
 
 /**
  * ✅ Void activity by activity_id
  */
-export async function adminVoidActivityById(params: {
-  activity_id: string;
-  void_reason?: string;
-  void_by?: string;
-}) {
+export async function adminVoidActivityById(params: { activity_id: string; void_reason?: string; void_by?: string }) {
   const activity_id = String(params.activity_id ?? "").trim();
   const void_reason = String(params.void_reason ?? "Admin deleted").trim();
   const void_by = String(params.void_by ?? "ADMIN").trim();
 
   if (!activity_id) throw new Error("activity_id is required");
 
-  return await callAdminApi<{ voided: boolean; activity_id: string }>(
-    "/api/admin/voidActivity",
-    { activity_id, void_reason, void_by }
-  );
+  return await callAdminApi<{ voided: boolean; activity_id: string }>("/api/admin/voidActivity", {
+    activity_id,
+    void_reason,
+    void_by,
+  });
 }
 
 /**
@@ -750,20 +729,16 @@ export async function adminUpdateVolunteerRole(params: { volunteer_code: string;
   if (!volunteer_code) throw new Error("volunteer_code is required");
   if (!["VOLUNTEER", "STAFF", "ADMIN"].includes(role)) throw new Error("role must be VOLUNTEER|STAFF|ADMIN");
 
-  return await callAdminApi<{ volunteer_code: string; role: VolunteerRole }>(
-    "/api/admin/updateVolunteerRole",
-    { volunteer_code, role }
-  );
+  return await callAdminApi<{ volunteer_code: string; role: VolunteerRole }>("/api/admin/updateVolunteerRole", {
+    volunteer_code,
+    role,
+  });
 }
 
 /**
  * ✅ Deduct points via Server API (Service Role)
  */
-export async function adminDeductPointsViaApi(params: {
-  volunteer_code: string;
-  amount: number;
-  note?: string;
-}) {
+export async function adminDeductPointsViaApi(params: { volunteer_code: string; amount: number; note?: string }) {
   const volunteer_code = String(params.volunteer_code ?? "").trim().toUpperCase();
   const amount = Number(params.amount ?? 0);
   const note = String(params.note ?? "admin deduct").trim();
@@ -782,4 +757,93 @@ export async function adminDeductPointsViaApi(params: {
     amount,
     note,
   });
+}
+
+// =====================================================
+// ✅ Admin – Reward Approval (NEW) : /api/admin/redemptions
+// =====================================================
+export type RedemptionStatus = "PENDING" | "APPROVED" | "REJECTED";
+
+export type AdminRedemptionRow = {
+  request_id: string;
+  created_at: string;
+  status: RedemptionStatus | string;
+  qty: number;
+  points_used: number;
+
+  reward_id: string;
+  reward_title: string;
+  reward_image_url?: string | null;
+  reward_stock?: number | null;
+
+  volunteer_id: string;
+  volunteer_code: string;
+  volunteer_name?: string | null;
+  volunteer_branch?: string | null;
+};
+
+// --- token helper (Admin endpoint ต้องใช้ JWT Bearer) ---
+function getStoredJwt(): string | null {
+  // รองรับหลายชื่อ เผื่อโปรเจกต์เก็บ token คนละ key
+  const keys = ["app_token", "auth_token", "jwt", "token", "volunteer_token"];
+  for (const k of keys) {
+    const v = localStorage.getItem(k);
+    if (v && String(v).trim()) return String(v).trim();
+  }
+  return null;
+}
+
+async function adminFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getStoredJwt();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(init?.headers ? (init.headers as any) : {}),
+  };
+
+  // NOTE: ถ้า token ว่าง endpoint จะตอบ 401
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(path, { ...init, headers });
+  const json = await res.json().catch(() => ({} as any));
+  if (!res.ok) throw new Error(json?.error || `API error ${res.status}`);
+  return json as T;
+}
+
+export async function adminListRedemptions(params?: { status?: RedemptionStatus; search?: string }) {
+  const status = (params?.status ?? "PENDING") as RedemptionStatus;
+  const search = String(params?.search ?? "").trim();
+
+  const qs = new URLSearchParams();
+  qs.set("status", status);
+  if (search) qs.set("search", search);
+
+  const json = await adminFetch<{ ok: boolean; rows: AdminRedemptionRow[] }>(`/api/admin/redemptions?${qs.toString()}`, {
+    method: "GET",
+  });
+
+  return json?.rows ?? [];
+}
+
+export async function adminApproveRedemption(requestId: string) {
+  const request_id = String(requestId ?? "").trim();
+  if (!request_id) throw new Error("Missing request_id");
+
+  const json = await adminFetch<{ ok: boolean; result?: any }>(`/api/admin/redemptions`, {
+    method: "POST",
+    body: JSON.stringify({ action: "APPROVE", request_id }),
+  });
+
+  return json;
+}
+
+export async function adminRejectRedemption(requestId: string) {
+  const request_id = String(requestId ?? "").trim();
+  if (!request_id) throw new Error("Missing request_id");
+
+  const json = await adminFetch<{ ok: boolean; result?: any }>(`/api/admin/redemptions`, {
+    method: "POST",
+    body: JSON.stringify({ action: "REJECT", request_id }),
+  });
+
+  return json;
 }
