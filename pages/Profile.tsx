@@ -56,15 +56,35 @@ export const Profile: React.FC = () => {
 
   const computeRank = (points: number, activityCount: number = 0): RankConfig => {
     if (points > 200 || activityCount > 10) {
-      return { name: "ผู้มีพลังขับเคลื่อนสังคม", minPoints: 201, icon: "🔥", color: "bg-orange-100 text-orange-600" };
+      return {
+        name: "ผู้มีพลังขับเคลื่อนสังคม",
+        minPoints: 201,
+        icon: "🔥",
+        color: "bg-orange-100 text-orange-600",
+      };
     }
     if (points > 100 || activityCount >= 5) {
-      return { name: "นักสร้างสรรค์แบ่งปันโอกาส", minPoints: 101, icon: "🌳", color: "bg-teal-100 text-teal-600" };
+      return {
+        name: "นักสร้างสรรค์แบ่งปันโอกาส",
+        minPoints: 101,
+        icon: "🌳",
+        color: "bg-teal-100 text-teal-600",
+      };
     }
     if (points > 50 || activityCount >= 3) {
-      return { name: "เพื่อนชุมชน", minPoints: 51, icon: "🌿", color: "bg-green-100 text-green-600" };
+      return {
+        name: "เพื่อนชุมชน",
+        minPoints: 51,
+        icon: "🌿",
+        color: "bg-green-100 text-green-600",
+      };
     }
-    return { name: "ผู้เริ่มต้นแบ่งปัน", minPoints: 0, icon: "🌱", color: "bg-lime-100 text-lime-600" };
+    return {
+      name: "ผู้เริ่มต้นแบ่งปัน",
+      minPoints: 0,
+      icon: "🌱",
+      color: "bg-lime-100 text-lime-600",
+    };
   };
 
   const toThaiYearFromDate = (dateLike: string) => {
@@ -72,18 +92,18 @@ export const Profile: React.FC = () => {
     return d.getFullYear() + 543;
   };
 
-const sumPointsWithRule = (txs: Transaction[], year?: number) => {
-  return txs
-    .filter((t) => (year ? t.thaiYear === year : true))
-    .reduce((sum, t) => {
-      if (t.thaiYear >= 2557 && t.thaiYear <= 2568) return sum;
+  const sumPointsWithRule = (txs: Transaction[], year?: number) => {
+    return txs
+      .filter((t) => (year ? t.thaiYear === year : true))
+      .reduce((sum, t) => {
+        if (t.thaiYear >= 2557 && t.thaiYear <= 2568) return sum;
 
-      // ✅ กันบวกซ้ำ
-      if (String(t.type).toUpperCase() === "ACTIVITY") return sum;
+        // ✅ กันบวกซ้ำจากกิจกรรม (Activity จะไม่เอามานับรวมแต้มปี เพราะ DB points เป็นตัวจริง)
+        if (String(t.type).toUpperCase() === "ACTIVITY") return sum;
 
-      return sum + Number(t.amount ?? 0);
-    }, 0);
-};
+        return sum + Number(t.amount ?? 0);
+      }, 0);
+  };
 
   const countActivities = (txs: Transaction[], year: number) => {
     return txs.filter((t) => t.type === "ACTIVITY" && t.thaiYear === year).length;
@@ -100,10 +120,6 @@ const sumPointsWithRule = (txs: Transaction[], year?: number) => {
     const toId = t.to_volunteer_id ?? null;
     const isOut = fromId && String(fromId) === String(myVolunteerId);
 
-    // sign rules:
-    // - transfer: out = -, in = +
-    // - deduct: always - for the receiver (to)
-    // - adjustment: always + for the receiver (to)
     let signedAmount = amountAbs;
     if (txType === "transfer") {
       signedAmount = isOut ? -amountAbs : +amountAbs;
@@ -113,7 +129,6 @@ const sumPointsWithRule = (txs: Transaction[], year?: number) => {
       signedAmount = +amountAbs;
     }
 
-    // description
     let desc = t.note ?? "-";
     if (txType === "transfer") {
       desc = isOut
@@ -249,7 +264,9 @@ const sumPointsWithRule = (txs: Transaction[], year?: number) => {
     };
 
     run();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [volunteerCode, reloadTick]);
 
   useEffect(() => {
@@ -284,7 +301,12 @@ const sumPointsWithRule = (txs: Transaction[], year?: number) => {
     const receiverRow = await fetchVolunteerByCode(toCode);
     if (!receiverRow) return alert("ไม่พบรหัสผู้รับในระบบ");
 
-    if (!confirm(`ยืนยันการโอน ${amount} แต้ม ให้รหัส ${toCode}?\n\n⚠️ เมื่อโอนแล้วจะไม่สามารถเรียกคืนได้!`)) return;
+    if (
+      !confirm(
+        `ยืนยันการโอน ${amount} แต้ม ให้รหัส ${toCode}?\n\n⚠️ เมื่อโอนแล้วจะไม่สามารถเรียกคืนได้!`
+      )
+    )
+      return;
 
     try {
       setTransferSubmitting(true);
@@ -403,8 +425,10 @@ const sumPointsWithRule = (txs: Transaction[], year?: number) => {
           </button>
         </div>
 
+        {/* ✅ เปลี่ยนจาก /rewards/:volunteerCode -> /rewards (ไม่ส่ง code ใน URL แล้ว) */}
         <Link
-          to={`/rewards/${volunteer.empId}`}
+          to="/rewards"
+          state={{ volunteerCode: volunteer.empId }} // เผื่อหน้า Rewards อยากใช้ (optional)
           className="bg-secondary p-4 rounded-xl flex flex-col items-center justify-center text-center text-white hover:bg-pink-400 transition shadow-sm"
         >
           <Gift className="mb-1" size={24} />
@@ -530,7 +554,9 @@ const sumPointsWithRule = (txs: Transaction[], year?: number) => {
                 type="submit"
                 disabled={transferSubmitting}
                 className={`w-full font-bold py-3 rounded-xl shadow-lg transition ${
-                  transferSubmitting ? "bg-gray-300 text-gray-600" : "bg-blue-600 text-white hover:bg-blue-700 shadow-blue-200"
+                  transferSubmitting
+                    ? "bg-gray-300 text-gray-600"
+                    : "bg-blue-600 text-white hover:bg-blue-700 shadow-blue-200"
                 }`}
               >
                 {transferSubmitting ? "กำลังโอน..." : "ยืนยันการโอน"}
