@@ -893,35 +893,3 @@ export async function adminFetchRedemptions(params: { status?: string; search?: 
 
   return normalizeApiList(json) as RedemptionRow[];
 }
-
-export async function adminApproveRedemption(params: { request_id: string; note?: string }) {
-  const request_id = String(params.request_id ?? "").trim();
-  const note = String(params.note ?? "").trim();
-  if (!request_id) throw new Error("request_id is required");
-
-  const res = await fetch("/api/admin/redemptions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "approve", request_id, note }),
-  });
-
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json?.error || `API error ${res.status}`);
-  return json?.data ?? json;
-}
-
-export async function adminRejectRedemption(params: { request_id: string; note?: string }) {
-  const request_id = String(params.request_id ?? "").trim();
-  const note = String(params.note ?? "").trim();
-  if (!request_id) throw new Error("request_id is required");
-
-  const res = await fetch("/api/admin/redemptions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "reject", request_id, note }),
-  });
-
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json?.error || `API error ${res.status}`);
-  return json?.data ?? json;
-}
