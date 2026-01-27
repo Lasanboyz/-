@@ -1,6 +1,7 @@
 // api/rewards/redeem.js
-import { getAdminClient } from "../../lib/supabaseAdmin.js";
-import { getBearerToken, verifyJwtHS256 } from "../../lib/jwt.js";
+import { getAdminClient } from "../_lib/supabaseAdmin.js";
+import { getBearerToken, verifyJwtHS256 } from "../_lib/jwt.js";
+
 
 function parseJsonBody(req) {
   if (!req || !req.body) return {};
