@@ -847,3 +847,81 @@ export async function adminRejectRedemption(requestId: string) {
 
   return json;
 }
+// ===============================
+// Admin: Redemptions (Rewards approval)
+// ===============================
+export type RedemptionRow = {
+  request_id: string;
+  status: "PENDING" | "APPROVED" | "REJECTED" | string;
+  created_at: string;
+
+  qty: number;
+  points_used: number;
+
+  volunteer_id?: string;
+  volunteer_code?: string;
+  volunteer_name?: string;
+  volunteer_branch?: string;
+
+  reward_id?: string;
+  reward_title?: string;
+  reward_cost?: number;
+  reward_stock?: number | null;
+  reward_image_url?: string;
+};
+
+function normalizeApiList(json: any): any[] {
+  // รองรับหลายรูปแบบ (กันพัง)
+  if (Array.isArray(json)) return json;
+  if (Array.isArray(json?.data)) return json.data;
+  if (Array.isArray(json?.rows)) return json.rows;
+  if (Array.isArray(json?.result)) return json.result;
+  return [];
+}
+
+export async function adminFetchRedemptions(params: { status?: string; search?: string }) {
+  const status = String(params.status ?? "PENDING").toUpperCase();
+  const search = String(params.search ?? "").trim();
+
+  const qs = new URLSearchParams();
+  qs.set("status", status);
+  if (search) qs.set("search", search);
+
+  const res = await fetch(`/api/admin/redemptions?${qs.toString()}`);
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.error || `API error ${res.status}`);
+
+  return normalizeApiList(json) as RedemptionRow[];
+}
+
+export async function adminApproveRedemption(params: { request_id: string; note?: string }) {
+  const request_id = String(params.request_id ?? "").trim();
+  const note = String(params.note ?? "").trim();
+  if (!request_id) throw new Error("request_id is required");
+
+  const res = await fetch("/api/admin/redemptions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "approve", request_id, note }),
+  });
+
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.error || `API error ${res.status}`);
+  return json?.data ?? json;
+}
+
+export async function adminRejectRedemption(params: { request_id: string; note?: string }) {
+  const request_id = String(params.request_id ?? "").trim();
+  const note = String(params.note ?? "").trim();
+  if (!request_id) throw new Error("request_id is required");
+
+  const res = await fetch("/api/admin/redemptions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "reject", request_id, note }),
+  });
+
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.error || `API error ${res.status}`);
+  return json?.data ?? json;
+}
