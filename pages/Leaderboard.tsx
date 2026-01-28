@@ -83,9 +83,7 @@ export const Leaderboard: React.FC = () => {
         });
 
         mapped.sort((a, b) =>
-          highlightActivityCount
-            ? b.activityCount - a.activityCount
-            : b.points - a.points
+          highlightActivityCount ? b.activityCount - a.activityCount : b.points - a.points
         );
 
         setItems(mapped);
@@ -107,14 +105,10 @@ export const Leaderboard: React.FC = () => {
 
   // ใช้ใน render (กัน list ว่างเพราะ filter)
   const visibleItems = useMemo(() => {
-    return items.filter((i) =>
-      highlightActivityCount ? i.activityCount > 0 : i.points > 0
-    );
+    return items.filter((i) => (highlightActivityCount ? i.activityCount > 0 : i.points > 0));
   }, [items, highlightActivityCount]);
 
-  const emptyText = isAllYears
-    ? "ยังไม่มีข้อมูลกิจกรรม"
-    : `ยังไม่มีข้อมูลกิจกรรมในปี ${selectedYear}`;
+  const emptyText = isAllYears ? "ยังไม่มีข้อมูลกิจกรรม" : `ยังไม่มีข้อมูลกิจกรรมในปี ${selectedYear}`;
 
   return (
     <div className="space-y-6">
@@ -235,11 +229,18 @@ export const Leaderboard: React.FC = () => {
                   {index < 3 ? <Medal size={20} /> : index + 1}
                 </div>
 
+                {/* ✅ รหัส + ชื่อ */}
                 <div className="flex-grow min-w-0">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
                     <span className="font-mono text-lg font-bold text-gray-800">
                       {item.volunteer.empId}
                     </span>
+
+                    {item.volunteer.name?.trim() ? (
+                      <span className="text-sm font-semibold text-gray-700 truncate">
+                        {item.volunteer.name}
+                      </span>
+                    ) : null}
                   </div>
 
                   <div className="flex items-center gap-2 mt-1">
