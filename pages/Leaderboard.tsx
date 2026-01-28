@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Trophy, Medal, Calendar, Flag, Users, Briefcase } from "lucide-react";
+import { ArrowLeft, Trophy, Calendar, Flag, Users, Briefcase, Crown } from "lucide-react";
 
 import {
   fetchLeaderboardSummary,
@@ -57,7 +57,6 @@ export const Leaderboard: React.FC = () => {
         const rows: any[] = await fetchLeaderboardSummary(mode, selectedYear);
         if (cancelled) return;
 
-        // debug (เอาออกทีหลังได้)
         console.log("[Leaderboard] mode/year/rows:", mode, selectedYear, rows?.length ?? 0);
 
         const mapped: LeaderboardItem[] = (rows ?? []).map((r: any) => {
@@ -67,16 +66,14 @@ export const Leaderboard: React.FC = () => {
           const activityCount = Number(r.activity_count ?? 0);
 
           const volunteer: Volunteer = {
-            id: empId || crypto.randomUUID(), // กัน key ว่าง
+            id: empId || crypto.randomUUID(),
             empId,
             name: r.name ?? "",
-            type: r.branch ?? "", // 👈 ใช้เป็นสาขา
+            type: r.branch ?? "", // ใช้เป็นสาขา
             ...(typeof r.is_staff === "boolean" ? { isStaff: r.is_staff } : {}),
           } as any;
 
-          // กันซ้ำ: ปีงดคะแนน -> 0
           const pointsAfterRule = isNoScoreYear ? 0 : points;
-
           const rank = getRank(pointsAfterRule, activityCount);
 
           return { volunteer, points: pointsAfterRule, activityCount, rank };
@@ -103,7 +100,6 @@ export const Leaderboard: React.FC = () => {
     };
   }, [mode, selectedYear, highlightActivityCount, isNoScoreYear]);
 
-  // ใช้ใน render (กัน list ว่างเพราะ filter)
   const visibleItems = useMemo(() => {
     return items.filter((i) => (highlightActivityCount ? i.activityCount > 0 : i.points > 0));
   }, [items, highlightActivityCount]);
@@ -210,115 +206,140 @@ export const Leaderboard: React.FC = () => {
         ) : (
           <div className="divide-y divide-gray-50">
             {visibleItems.map((item, index) => {
-              const isTop3 = index < 3;
               const isTop1 = index === 0;
               const isTop2 = index === 1;
-              const isTop3rd = index === 2;
+              const isTop3 = index === 2;
+              const isTop = index < 3;
 
               const name = (item.volunteer.name ?? "").trim();
               const branch = (item.volunteer.type ?? "").trim();
               const nameWithBranch =
                 name && branch ? `${name} • ${branch}` : name || branch || "";
 
-              // Glow พื้นหลัง Top 3 (ใช้ gradient แบบนุ่มๆ)
-              const topGlow =
+              const topBg =
                 isTop1
                   ? "bg-gradient-to-r from-yellow-50 via-amber-50 to-white"
                   : isTop2
                   ? "bg-gradient-to-r from-slate-50 via-gray-50 to-white"
-                  : isTop3rd
+                  : isTop3
                   ? "bg-gradient-to-r from-orange-50 via-amber-50 to-white"
                   : "";
 
-              // ring highlight
               const topRing =
                 isTop1
                   ? "ring-1 ring-yellow-200"
                   : isTop2
                   ? "ring-1 ring-gray-200"
-                  : isTop3rd
+                  : isTop3
                   ? "ring-1 ring-orange-200"
                   : "";
 
-              // crown color
-              const crownColor =
+              const topShadow =
                 isTop1
-                  ? "text-yellow-600"
+                  ? "shadow-[0_10px_25px_rgba(245,158,11,0.18)]"
                   : isTop2
-                  ? "text-gray-500"
-                  : "text-orange-600";
+                  ? "shadow-[0_10px_25px_rgba(100,116,139,0.14)]"
+                  : isTop3
+                  ? "shadow-[0_10px_25px_rgba(249,115,22,0.16)]"
+                  : "";
+
+              const crownColor =
+                isTop1 ? "text-amber-500" : isTop2 ? "text-slate-400" : "text-orange-500";
+
+              const badgeBg =
+                isTop1
+                  ? "bg-gradient-to-br from-amber-200 to-yellow-100 text-amber-700"
+                  : isTop2
+                  ? "bg-gradient-to-br from-slate-200 to-gray-100 text-slate-600"
+                  : "bg-gradient-to-br from-orange-200 to-amber-100 text-orange-700";
 
               return (
                 <div
                   key={`${item.volunteer.empId}_${index}`}
-                  className={`p-4 flex items-center gap-4 hover:bg-pink-50/50 transition animate-fade-in-up relative ${topGlow} ${topRing}`}
+                  className={[
+                    "p-4 flex items-center gap-4 transition animate-fade-in-up relative",
+                    isTop ? `${topBg} ${topRing} ${topShadow} rounded-2xl mx-3 my-2` : "hover:bg-pink-50/50",
+                  ].join(" ")}
                   style={{ animationDelay: `${index * 0.05}s` }}
                 >
-                  {/* crown icon on Top 3 */}
-                  {isTop3 && (
-                    <div className="absolute top-2 right-2 opacity-90">
-                      <Trophy size={18} className={crownColor} />
-                    </div>
+                  {/* Glow layer for Top 3 */}
+                  {isTop && (
+                    <div
+                      className={[
+                        "absolute -inset-0.5 rounded-2xl blur-xl opacity-40 pointer-events-none",
+                        isTop1
+                          ? "bg-gradient-to-r from-amber-200 via-yellow-100 to-transparent"
+                          : isTop2
+                          ? "bg-gradient-to-r from-slate-200 via-gray-100 to-transparent"
+                          : "bg-gradient-to-r from-orange-200 via-amber-100 to-transparent",
+                      ].join(" ")}
+                    />
                   )}
 
-                  <div
-                    className={`w-10 h-10 flex-shrink-0 flex items-center justify-center rounded-full font-bold text-lg ${
-                      isTop1
-                        ? "bg-yellow-100 text-yellow-600 shadow-sm"
-                        : isTop2
-                        ? "bg-gray-100 text-gray-600 shadow-sm"
-                        : isTop3rd
-                        ? "bg-orange-100 text-orange-600 shadow-sm"
-                        : "bg-white text-gray-400 border border-gray-100"
-                    }`}
-                  >
-                    {isTop3 ? <Medal size={20} /> : index + 1}
+                  {/* Rank badge (ชัดเจนว่า 1/2/3) */}
+                  <div className="relative flex-shrink-0">
+                    {isTop ? (
+                      <div className="w-12 h-12 rounded-2xl flex items-center justify-center font-extrabold text-xl shadow-sm bg-white/70">
+                        <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${badgeBg}`}>
+                          {index + 1}
+                        </div>
+                        <div className="absolute -top-2 -right-2 bg-white rounded-full p-1 shadow-sm">
+                          <Crown size={16} className={crownColor} />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="w-10 h-10 flex items-center justify-center rounded-full font-bold text-gray-400 border border-gray-100 bg-white">
+                        {index + 1}
+                      </div>
+                    )}
                   </div>
 
-                  {/* ✅ Mobile Pro + ชื่อ • สาขา */}
-                  <div className="flex-grow min-w-0">
+                  {/* ✅ รหัส + ชื่อ • สาขา (มือถืออ่านง่าย) */}
+                  <div className="flex-grow min-w-0 relative">
                     <div className="min-w-0">
-                      {/* แถวบน: รหัส */}
                       <div className="flex items-baseline gap-2 min-w-0">
-                        <span className="font-mono text-lg font-bold text-gray-800">
+                        <span className="font-mono text-lg font-extrabold text-gray-900 tracking-tight">
                           {item.volunteer.empId}
                         </span>
-
-                        {/* จอใหญ่: โชว์ชื่อ • สาขา ข้างๆรหัส */}
-                        {nameWithBranch ? (
-                          <span className="hidden sm:inline text-sm font-semibold text-gray-700 truncate">
-                            {nameWithBranch}
-                          </span>
-                        ) : null}
                       </div>
 
-                      {/* มือถือ: โชว์ชื่อ • สาขา บรรทัดใหม่ */}
                       {nameWithBranch ? (
-                        <div className="sm:hidden text-sm text-gray-600 truncate -mt-0.5">
+                        <div className="text-sm font-semibold text-gray-700 truncate -mt-0.5">
                           {nameWithBranch}
                         </div>
-                      ) : null}
+                      ) : (
+                        <div className="text-xs text-gray-400 -mt-0.5">—</div>
+                      )}
                     </div>
 
-                    <div className="flex items-center gap-2 mt-1">
+                    <div className="flex items-center gap-2 mt-2">
                       <span
                         className={`text-[10px] px-2 py-0.5 rounded-full ${item.rank.color} flex items-center gap-1`}
                       >
                         {item.rank.icon} {item.rank.name}
                       </span>
+
+                      {isTop && (
+                        <span className="text-[10px] font-bold text-gray-500 bg-white/70 px-2 py-0.5 rounded-full border border-gray-100">
+                          TOP {index + 1}
+                        </span>
+                      )}
                     </div>
                   </div>
 
-                  <div className="text-right flex-shrink-0 flex flex-col items-end">
+                  {/* คะแนน / ครั้ง */}
+                  <div className="text-right flex-shrink-0 flex flex-col items-end relative">
                     {highlightActivityCount ? (
                       <>
-                        <div className="flex items-center gap-1 text-2xl font-bold text-pink-600 leading-none">
-                          {item.activityCount}
-                          <span className="text-sm font-medium text-gray-500 mt-1">ครั้ง</span>
+                        <div className="flex items-baseline gap-1 leading-none">
+                          <span className="text-3xl font-extrabold text-pink-600">
+                            {item.activityCount}
+                          </span>
+                          <span className="text-sm font-semibold text-gray-500">ครั้ง</span>
                         </div>
 
                         {!isNoScoreYear ? (
-                          <div className="mt-1 text-[10px] text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
+                          <div className="mt-1 text-[10px] text-gray-600 bg-white/70 px-2 py-0.5 rounded-full border border-gray-100">
                             รวม {item.points} คะแนน
                           </div>
                         ) : (
@@ -327,9 +348,11 @@ export const Leaderboard: React.FC = () => {
                       </>
                     ) : (
                       <>
-                        <div className="flex items-center gap-1 text-2xl font-bold text-primary leading-none">
-                          {item.points}
-                          <span className="text-sm font-medium text-gray-500 mt-1">คะแนน</span>
+                        <div className="flex items-baseline gap-1 leading-none">
+                          <span className="text-3xl font-extrabold text-primary">
+                            {item.points}
+                          </span>
+                          <span className="text-sm font-semibold text-gray-500">คะแนน</span>
                         </div>
                         <div className="mt-1 text-xs text-pink-600 bg-pink-50 px-2 py-0.5 rounded-full flex items-center gap-1">
                           <Flag size={10} /> {item.activityCount} ครั้ง
