@@ -8,7 +8,7 @@ import { fetchVolunteerPointsByCode } from "../services/dataService";
 import bagImg from "../src/assets/กระเป๋าภารกิจคนอาสา.png";
 import fanImg from "../src/assets/พัดลมพลังช้าง.png";
 import umbrellaImg from "../src/assets/ร่มนักสู้แดดฝน.png";
-import hatImg from "../src/assets/หมวกกันแดดสายเท่.png";
+import hatImg from "../src/assets/หมวกกันสายเท่.png";
 import richGlassImg from "../src/assets/แก้วน้ำคนรวย.png";
 
 type AuthVolunteer = {
@@ -55,7 +55,7 @@ const rewardImages: Record<string, string> = {
   "แก้วน้ำคนรวย": richGlassImg,
   "พัดลมพลังช้าง": fanImg,
   "ร่มนักสู้แดดฝน": umbrellaImg,
-  "หมวกกันแดดสายเท่": hatImg,
+  "หมวกกันสายเท่": hatImg,
 };
 
 // ✅ Safe placeholder (no external URL)
