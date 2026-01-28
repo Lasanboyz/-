@@ -1,5 +1,6 @@
 // api/rewards/redeem.js
 import { getAdminClient } from "../_lib/supabaseAdmin.js";
+import { getBearerToken, verifyJwtHS256 } from "../_lib/jwt.js";
 
 function parseJsonBody(req) {
   if (!req || !req.body) return {};
@@ -14,83 +15,146 @@ function parseJsonBody(req) {
 }
 
 export default async function handler(req, res) {
-  try {
-    const supabase = getAdminClient();
-    const { reward_id, volunteer_id } = parseJsonBody(req);
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
 
-    if (!reward_id || !volunteer_id) {
-      return res.status(400).json({ error: "reward_id and volunteer_id required" });
+  try {
+    // ---- Auth ----
+    const token = getBearerToken(req);
+    const secret = process.env.APP_JWT_SECRET;
+    if (!secret) {
+      return res.status(500).json({ error: "Missing APP_JWT_SECRET" });
     }
 
-    // 1) ดึงข้อมูลอาสา
-    const { data: volunteer, error: vErr } = await supabase
+    const payload = verifyJwtHS256(token, secret);
+    const volunteerId = payload && payload.volunteer_id;
+    if (!volunteerId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    // ---- Body ----
+    const body = parseJsonBody(req);
+    const reward_id = String(body.reward_id || "").trim();
+    const qty = Math.max(1, Math.floor(Number(body.qty || 1)));
+    const phone_number = String(body.phone_number || "").trim();
+
+    if (!reward_id) {
+      return res.status(400).json({ error: "Missing reward_id" });
+    }
+
+    const supabase = getAdminClient();
+
+    // ---- Load reward ----
+    const { data: reward, error: rewardErr } = await supabase
+      .from("rewards")
+      .select("id, title, cost_points, stock, is_active")
+      .eq("id", reward_id)
+      .maybeSingle();
+
+    if (rewardErr) throw rewardErr;
+    if (!reward) return res.status(404).json({ error: "Reward not found" });
+    if (reward.is_active === false) {
+      return res.status(400).json({ error: "Reward inactive" });
+    }
+
+    const cost = Number(reward.cost_points || 0);
+    const stock = Number(reward.stock || 0);
+    const pointsUsed = cost * qty;
+
+    if (pointsUsed <= 0) {
+      return res.status(400).json({ error: "Invalid reward cost" });
+    }
+
+    if (stock < qty) {
+      return res.status(400).json({ error: "Stock not enough" });
+    }
+
+    // ---- Load volunteer ----
+    const { data: vol, error: volErr } = await supabase
       .from("volunteers")
       .select("id, points")
-      .eq("id", volunteer_id)
-      .single();
+      .eq("id", volunteerId)
+      .maybeSingle();
 
-    if (vErr || !volunteer) {
-      return res.status(404).json({ error: "Volunteer not found" });
-    }
+    if (volErr) throw volErr;
+    if (!vol) return res.status(404).json({ error: "Volunteer not found" });
 
-    // 2) ดึงรางวัล
-    const { data: reward, error: rErr } = await supabase
-      .from("rewards")
-      .select("id, cost")
-      .eq("id", reward_id)
-      .single();
+    const currentPoints = Number(vol.points || 0);
 
-    if (rErr || !reward) {
-      return res.status(404).json({ error: "Reward not found" });
-    }
-
-    // 3) คำนวณแต้มที่ถูกล็อกจาก pending
-    const { data: pendingList, error: pErr } = await supabase
+    // =====================================================
+    // ✅ NEW: LOCK POINTS WHEN PENDING
+    // pendingPoints = sum(points_used) where status = PENDING
+    // availablePoints = currentPoints - pendingPoints
+    // =====================================================
+    const { data: pendingRows, error: pendErr } = await supabase
       .from("redemption_requests")
-      .select("reward_id")
-      .eq("volunteer_id", volunteer.id)
-      .eq("status", "pending");
+      .select("points_used")
+      .eq("volunteer_id", volunteerId)
+      .eq("status", "PENDING");
 
-    if (pErr) {
-      return res.status(500).json({ error: pErr.message });
-    }
+    if (pendErr) throw pendErr;
 
-    let pendingPoints = 0;
-    if (pendingList.length > 0) {
-      const rewardIds = pendingList.map(r => r.reward_id);
-      const { data: rewardsPending } = await supabase
-        .from("rewards")
-        .select("id, cost")
-        .in("id", rewardIds);
+    const pendingPoints = (pendingRows || []).reduce((sum, r) => {
+      const n = Number(r?.points_used || 0);
+      return sum + (Number.isFinite(n) ? n : 0);
+    }, 0);
 
-      pendingPoints = rewardsPending.reduce((sum, r) => sum + r.cost, 0);
-    }
+    const availablePoints = currentPoints - pendingPoints;
 
-    const availablePoints = volunteer.points - pendingPoints;
-
-    // 4) เช็กแต้มที่ใช้ได้จริง
-    if (availablePoints < reward.cost) {
+    if (availablePoints < pointsUsed) {
       return res.status(400).json({
         error: "Not enough available points",
-        availablePoints,
+        current_points: currentPoints,
+        pending_points: pendingPoints,
+        available_points: availablePoints,
+        required_points: pointsUsed,
       });
     }
 
-    // 5) สร้างคำขอแลกของ
-    const { error: insErr } = await supabase
+    // ---- Prevent duplicate pending (same reward) ----
+    const { data: dup } = await supabase
       .from("redemption_requests")
-      .insert({
-        volunteer_id: volunteer.id,
-        reward_id: reward.id,
-        status: "pending",
-      });
+      .select("id")
+      .eq("volunteer_id", volunteerId)
+      .eq("reward_id", reward_id)
+      .eq("status", "PENDING")
+      .limit(1);
 
-    if (insErr) {
-      return res.status(500).json({ error: insErr.message });
+    if (Array.isArray(dup) && dup.length > 0) {
+      return res.status(400).json({ error: "Already have pending request" });
     }
 
-    return res.json({ success: true });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
+    // ---- Insert request ----
+    const payloadInsert = {
+      volunteer_id: volunteerId,
+      reward_id,
+      reward_title: reward.title,
+      qty,
+      points_used: pointsUsed,
+      status: "PENDING",
+    };
+
+    // เก็บเบอร์ (ถ้ามี column นี้อยู่จริง)
+    if (phone_number) payloadInsert.phone_number = phone_number;
+
+    const { data: reqRow, error: insErr } = await supabase
+      .from("redemption_requests")
+      .insert(payloadInsert)
+      .select()
+      .maybeSingle();
+
+    if (insErr) throw insErr;
+
+    return res.status(200).json({
+      ok: true,
+      request: reqRow,
+      current_points: currentPoints,
+      pending_points: pendingPoints,
+      available_points: availablePoints, // available ก่อนสร้างรายการนี้
+    });
+  } catch (e) {
+    console.error("[redeem] error:", e);
+    return res.status(500).json({ error: e.message || "Internal error" });
   }
 }
