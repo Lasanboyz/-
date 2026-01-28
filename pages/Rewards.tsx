@@ -90,7 +90,8 @@ export const Rewards: React.FC = () => {
     }
   });
 
-  const token = useMemo(() => localStorage.getItem("auth_token") || "", []);
+  // ✅ FIX: ห้ามใช้ useMemo อ่าน token ครั้งเดียว เพราะ token จะค้างค่า
+  const getToken = () => localStorage.getItem("auth_token") || "";
 
   const [rewards, setRewards] = useState<RewardUI[]>([]);
   const [currentPoints, setCurrentPoints] = useState<number>(() =>
@@ -144,10 +145,11 @@ export const Rewards: React.FC = () => {
   // Guard: must login
   // -------------------------
   useEffect(() => {
-    if (!token || !me?.id) {
+    const tokenNow = getToken();
+    if (!tokenNow || !me?.id) {
       navigate("/", { replace: true });
     }
-  }, [token, me?.id, navigate]);
+  }, [me?.id, navigate]);
 
   // -------------------------
   // Load rewards + pending + points(DB)
@@ -188,19 +190,22 @@ export const Rewards: React.FC = () => {
         // 2) pending requests
         let pending: PendingReq[] = [];
         try {
-          const r2 = await fetch("/api/rewards/myRequests", {
-            method: "GET",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-          });
+          const tokenNow = getToken(); // ✅ token สด
+          if (tokenNow) {
+            const r2 = await fetch("/api/rewards/myRequests", {
+              method: "GET",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${tokenNow}`,
+              },
+            });
 
-          const d2 = await r2.json().catch(() => ({}));
-          if (r2.ok) {
-            pending = (d2?.requests || []).filter(
-              (x: PendingReq) => x.status === "PENDING"
-            );
+            const d2 = await r2.json().catch(() => ({}));
+            if (r2.ok) {
+              pending = (d2?.requests || []).filter(
+                (x: PendingReq) => x.status === "PENDING"
+              );
+            }
           }
         } catch {
           pending = [];
@@ -225,7 +230,7 @@ export const Rewards: React.FC = () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, []); // ✅ FIX: ไม่ต้องผูกกับ token ที่ค้างค่า
 
   // pending map: ป้องกันแลกซ้ำ “ของชิ้นเดียวกัน” ระหว่างรออนุมัติ
   const pendingMap = useMemo(() => {
@@ -266,11 +271,18 @@ export const Rewards: React.FC = () => {
     setRedeemLoading(true);
 
     try {
+      const tokenNow = getToken(); // ✅ token สดตอนกดแลก
+      if (!tokenNow) {
+        alert("กรุณาเข้าสู่ระบบใหม่อีกครั้ง");
+        navigate("/", { replace: true });
+        return;
+      }
+
       const r = await fetch("/api/rewards/redeem", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${tokenNow}`,
         },
         body: JSON.stringify({
           reward_id: selectedReward.id,
