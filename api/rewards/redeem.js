@@ -14,23 +14,69 @@ function parseJsonBody(req) {
   return req.body;
 }
 
+// ✅ tiny helper: check uuid-ish (ลด false positive)
+function looksLikeUuid(v) {
+  const s = String(v || "").trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
   try {
+    const supabase = getAdminClient();
+
     // ---- Auth ----
     const token = getBearerToken(req);
+    if (!token) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
     const secret = process.env.APP_JWT_SECRET;
     if (!secret) {
       return res.status(500).json({ error: "Missing APP_JWT_SECRET" });
     }
 
-    const payload = verifyJwtHS256(token, secret);
-    const volunteerId = payload && payload.volunteer_id;
-    if (!volunteerId) {
+    let payload;
+    try {
+      payload = verifyJwtHS256(token, secret);
+    } catch (err) {
       return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    // ✅ รองรับหลาย key name (กันพังเมื่อ JWT เปลี่ยนรูปแบบ)
+    let volunteerId =
+      (payload && (payload.volunteer_id || payload.volunteerId || payload.id || payload.sub)) || null;
+
+    // ✅ รองรับ volunteer_code ด้วย (ถ้า token ไม่ได้ฝัง volunteer_id)
+    const volunteerCode =
+      (payload &&
+        (payload.volunteer_code || payload.volunteerCode || payload.code || payload.volunteer)) ||
+      null;
+
+    // ถ้า volunteerId ไม่ใช่ uuid → ทิ้งไป แล้วใช้ code หาแทน
+    if (volunteerId && !looksLikeUuid(volunteerId)) {
+      volunteerId = null;
+    }
+
+    if (!volunteerId) {
+      const code = String(volunteerCode || "").trim().toUpperCase();
+      if (!code) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { data: vRow, error: vErr } = await supabase
+        .from("volunteers")
+        .select("id")
+        .eq("volunteer_code", code)
+        .maybeSingle();
+
+      if (vErr) throw vErr;
+      if (!vRow?.id) return res.status(401).json({ error: "Unauthorized" });
+
+      volunteerId = vRow.id;
     }
 
     // ---- Body ----
@@ -42,8 +88,6 @@ export default async function handler(req, res) {
     if (!reward_id) {
       return res.status(400).json({ error: "Missing reward_id" });
     }
-
-    const supabase = getAdminClient();
 
     // ---- Load reward ----
     const { data: reward, error: rewardErr } = await supabase
@@ -149,7 +193,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       request: reqRow,
-      new_points: newPoints, // ✅ ส่งแต้มใหม่กลับ
+      new_points: newPoints,
     });
   } catch (e) {
     console.error("[redeem] error:", e);
