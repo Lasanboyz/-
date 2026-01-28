@@ -1,227 +1,254 @@
 // api/admin/redemptions.ts
-import { createClient } from "@supabase/supabase-js";
+import { getAdminClient } from "../_lib/supabaseAdmin.js";
+import { getBearerToken, verifyJwtHS256 } from "../_lib/jwt.js";
 
-// ✅ ไม่ใช้ @vercel/node เพื่อกัน build พัง
-type VercelRequest = {
-  method?: string;
-  query?: Record<string, any>;
-  body?: any;
-  headers?: Record<string, any>;
-};
-
-type VercelResponse = {
-  status: (code: number) => VercelResponse;
-  json: (data: any) => void;
-};
-
-const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-const SERVICE_ROLE_KEY =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.SUPABASE_SERVICE_KEY ||
-  process.env.VITE_SUPABASE_SERVICE_ROLE_KEY;
-
-function getAdminClient() {
-  if (!SUPABASE_URL) throw new Error("Missing env: SUPABASE_URL");
-  if (!SERVICE_ROLE_KEY) throw new Error("Missing env: SUPABASE_SERVICE_ROLE_KEY");
-  return createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-    auth: { persistSession: false },
-  });
+function send(res: any, status: number, body: any) {
+  res.statusCode = status;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.end(JSON.stringify(body));
 }
 
-const ok = (res: VercelResponse, data: any) => res.status(200).json({ ok: true, data });
-const bad = (res: VercelResponse, status: number, error: string, extra?: any) =>
-  res.status(status).json({ ok: false, error, ...(extra ? { extra } : {}) });
+function safeParseBody(req: any) {
+  const b = req.body;
+  if (!b) return {};
+  if (typeof b === "object") return b;
+  if (typeof b === "string") {
+    try {
+      return JSON.parse(b);
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
 
-const asUpper = (v: any) => String(v ?? "").trim().toUpperCase();
+function mustAdmin(payload: any) {
+  const role = String(payload?.role ?? "").toUpperCase();
+  return role === "ADMIN" || role === "STAFF";
+}
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default async function handler(req: any, res: any) {
   try {
+    if (req.method === "OPTIONS") return send(res, 200, { ok: true });
+
     const supabase = getAdminClient();
 
-    // =========================
-    // GET: /api/admin/redemptions?status=PENDING&search=...
-    // =========================
+    // =====================
+    // GET: list redemptions
+    // =====================
     if (req.method === "GET") {
-      const status = asUpper(req.query?.status ?? "PENDING");
-      const search = String(req.query?.search ?? "").trim().toLowerCase();
+      const url = new URL(req.url, "http://localhost");
+      const status = String(url.searchParams.get("status") || "PENDING").toUpperCase();
+      const search = String(url.searchParams.get("search") || "").trim();
 
-      const { data: reqRows, error: reqErr } = await supabase
+      // Auth (admin)
+      const token = getBearerToken(req);
+      const secret = process.env.APP_JWT_SECRET;
+      if (!secret) return send(res, 500, { error: "Missing APP_JWT_SECRET" });
+
+      const payload = verifyJwtHS256(token, secret);
+      if (!payload || !mustAdmin(payload)) return send(res, 401, { error: "Unauthorized" });
+
+      let q = supabase
         .from("redemption_requests")
-        .select("id, volunteer_id, reward_id, reward_title, qty, points_used, status, created_at, phone_number")
+        .select(
+          `
+          id,
+          created_at,
+          status,
+          qty,
+          points_used,
+          reward_id,
+          reward_title,
+          phone_number,
+          volunteer_id,
+          volunteers:volunteer_id ( volunteer_code, name, branch ),
+          rewards:reward_id ( title, image_url, stock )
+        `
+        )
+        .order("created_at", { ascending: false });
 
-        .eq("status", status)
-        .order("created_at", { ascending: false })
-        .limit(200);
+      if (status) q = q.eq("status", status);
+      if (search) {
+        // search by volunteer_code / name / reward_title (best effort)
+        q = q.or(
+          `reward_title.ilike.%${search}%,volunteers.name.ilike.%${search}%,volunteers.volunteer_code.ilike.%${search}%`
+        );
+      }
 
-      if (reqErr) throw reqErr;
+      const { data, error } = await q.limit(200);
+      if (error) return send(res, 500, { error: error.message });
 
-      const requests = (reqRows ?? []).filter((r: any) => r?.id);
-      if (requests.length === 0) return ok(res, []);
-
-      const rewardIds = Array.from(
-        new Set(requests.map((r: any) => String(r.reward_id ?? "").trim()).filter(Boolean))
-      );
-      const volunteerIds = Array.from(
-        new Set(requests.map((r: any) => String(r.volunteer_id ?? "").trim()).filter(Boolean))
-      );
-
-      const { data: rewardRows, error: rewardErr } = await supabase
-        .from("rewards")
-        .select("id, title, stock, image_url")
-        .in("id", rewardIds);
-
-      if (rewardErr) throw rewardErr;
-
-      const { data: volRows, error: volErr } = await supabase
-        .from("volunteers")
-        .select("id, volunteer_code, name, branch, points")
-        .in("id", volunteerIds);
-
-      if (volErr) throw volErr;
-
-      const rewardMap = new Map<string, any>();
-      for (const r of rewardRows ?? []) rewardMap.set(String(r.id), r);
-
-      const volMap = new Map<string, any>();
-      for (const v of volRows ?? []) volMap.set(String(v.id), v);
-
-      let rows = requests.map((r: any) => {
-        const reward = rewardMap.get(String(r.reward_id ?? "")) ?? null;
-        const vol = volMap.get(String(r.volunteer_id ?? "")) ?? null;
-
-        const rewardTitle = reward?.title ?? r.reward_title ?? "";
-        const rewardImage = reward?.image_url ?? "";
-
-        return {
+      const rows =
+        (data || []).map((r: any) => ({
           request_id: r.id,
-          status: r.status,
           created_at: r.created_at,
-          phone_number: r.phone_number ?? "",   // ✅ เพิ่มบรรทัดนี้
-          qty: Number(r.qty ?? 1),
-          points_used: Number(r.points_used ?? 0),
-
-          volunteer_id: r.volunteer_id,
-          volunteer_code: vol?.volunteer_code ?? "",
-          volunteer_name: vol?.name ?? "",
-          volunteer_branch: vol?.branch ?? "",
+          status: r.status,
+          qty: r.qty,
+          points_used: r.points_used,
 
           reward_id: r.reward_id,
-          reward_title: rewardTitle,
-          reward_cost: 0,
-          reward_stock: typeof reward?.stock === "number" ? reward.stock : Number(reward?.stock ?? 0),
-          reward_image_url: rewardImage,
-        };
-      });
+          reward_title: r.rewards?.title || r.reward_title,
+          reward_image_url: r.rewards?.image_url ?? null,
+          reward_stock: r.rewards?.stock ?? null,
 
-      if (search) {
-        rows = rows.filter((x: any) => {
-          return (
-            String(x.volunteer_code ?? "").toLowerCase().includes(search) ||
-            String(x.volunteer_name ?? "").toLowerCase().includes(search) ||
-            String(x.reward_title ?? "").toLowerCase().includes(search)
-          );
-        });
-      }
+          volunteer_id: r.volunteer_id,
+          volunteer_code: r.volunteers?.volunteer_code ?? "",
+          volunteer_name: r.volunteers?.name ?? "",
+          volunteer_branch: r.volunteers?.branch ?? "",
+        })) || [];
 
-      return ok(res, rows);
+      return send(res, 200, { ok: true, rows });
     }
 
-    // =========================
-    // POST: { action:"approve"|"reject", request_id, note? }
-    // =========================
-    if (req.method === "POST") {
-      const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
-      const action = String(body?.action ?? "").toLowerCase();
-      const request_id = String(body?.request_id ?? "").trim();
-      const note = String(body?.note ?? "").trim();
+    // =====================
+    // POST: approve/reject
+    // =====================
+    if (req.method !== "POST") return send(res, 405, { error: "Method Not Allowed" });
 
-      if (!request_id) return bad(res, 400, "request_id is required");
-      if (!["approve", "reject"].includes(action)) return bad(res, 400, "action must be approve|reject");
+    // Auth (admin)
+    const token = getBearerToken(req);
+    const secret = process.env.APP_JWT_SECRET;
+    if (!secret) return send(res, 500, { error: "Missing APP_JWT_SECRET" });
 
-      const { data: reqRow, error: reqErr } = await supabase
-        .from("redemption_requests")
-        .select("id, volunteer_id, reward_id, qty, points_used, status")
-        .eq("id", request_id)
-        .maybeSingle();
+    const payload = verifyJwtHS256(token, secret);
+    if (!payload || !mustAdmin(payload)) return send(res, 401, { error: "Unauthorized" });
 
-      if (reqErr) throw reqErr;
-      if (!reqRow?.id) return bad(res, 404, "request not found");
-      if (asUpper(reqRow.status) !== "PENDING")
-        return bad(res, 400, `request is not PENDING (current=${reqRow.status})`);
+    const body = safeParseBody(req);
+    const action = String(body.action || "").toUpperCase();
+    const request_id = String(body.request_id || "").trim();
 
-      if (action === "reject") {
-        const { error: updErr } = await supabase
-          .from("redemption_requests")
-          .update({ status: "REJECTED", admin_note: note || "Rejected by admin" })
-          .eq("id", request_id);
+    if (!request_id) return send(res, 400, { error: "request_id is required" });
+    if (!["APPROVE", "REJECT"].includes(action)) return send(res, 400, { error: "Invalid action" });
 
-        if (updErr) throw updErr;
-        return ok(res, { request_id, status: "REJECTED" });
-      }
+    // Load request
+    const { data: reqRow, error: reqErr } = await supabase
+      .from("redemption_requests")
+      .select("id, status, volunteer_id, reward_id, qty, points_used, reward_title")
+      .eq("id", request_id)
+      .maybeSingle();
 
-      // approve: check stock
-      const { data: rewardRow, error: rewardErr } = await supabase
+    if (reqErr) return send(res, 500, { error: reqErr.message });
+    if (!reqRow) return send(res, 404, { error: "Request not found" });
+
+    const status = String(reqRow.status || "").toUpperCase();
+    if (status !== "PENDING") {
+      // idempotent: ไม่ทำซ้ำ
+      return send(res, 200, { ok: true, result: { message: `Already ${status}`, request_id } });
+    }
+
+    const nowIso = new Date().toISOString();
+
+    if (action === "APPROVE") {
+      // check reward stock
+      const { data: reward, error: rewardErr } = await supabase
         .from("rewards")
-        .select("id, stock")
+        .select("id, stock, title")
         .eq("id", reqRow.reward_id)
         .maybeSingle();
 
-      if (rewardErr) throw rewardErr;
-      if (!rewardRow?.id) return bad(res, 404, "reward not found");
+      if (rewardErr) return send(res, 500, { error: rewardErr.message });
+      if (!reward) return send(res, 404, { error: "Reward not found" });
 
-      const qty = Math.max(1, Math.floor(Number(reqRow.qty ?? 1)));
-      const stock = Number(rewardRow.stock ?? 0);
-      if (stock < qty) return bad(res, 400, `stock not enough (stock=${stock}, qty=${qty})`);
+      const stock = Number(reward.stock ?? 0);
+      const qty = Number(reqRow.qty ?? 1);
+      if (stock < qty) return send(res, 400, { error: "Stock not enough" });
 
-      // load volunteer by volunteer_id
-      const { data: vRow, error: vErr } = await supabase
+      // 1) mark approved
+      const { error: updReqErr } = await supabase
+        .from("redemption_requests")
+        .update({
+          status: "APPROVED",
+          approved_at: nowIso,
+          approved_by: String(payload?.volunteer_code ?? payload?.volunteer_id ?? "ADMIN"),
+        })
+        .eq("id", request_id);
+
+      if (updReqErr) return send(res, 500, { error: updReqErr.message });
+
+      // 2) deduct stock
+      const { error: updStockErr } = await supabase
+        .from("rewards")
+        .update({ stock: stock - qty })
+        .eq("id", reward.id);
+
+      if (updStockErr) return send(res, 500, { error: updStockErr.message });
+
+      // 3) optional: log finalize (ไม่หักแต้มเพิ่ม)
+      const { error: txErr } = await supabase.from("point_transactions").insert({
+        from_volunteer_id: reqRow.volunteer_id,
+        to_volunteer_id: null,
+        amount: Number(reqRow.points_used ?? 0),
+        type: "redeem_finalize",
+        note: `redeem approved: ${reward.title} x${qty}`,
+      });
+
+      if (txErr) console.error("[admin redemptions] finalize tx log error:", txErr);
+
+      return send(res, 200, {
+        ok: true,
+        result: { request_id, status: "APPROVED", stock_after: stock - qty },
+      });
+    }
+
+    // action === "REJECT"
+    {
+      const pointsUsed = Number(reqRow.points_used ?? 0);
+
+      // 1) refund points (เพราะตอน PENDING เราหักไปแล้ว)
+      const { data: vol, error: volErr } = await supabase
         .from("volunteers")
         .select("id, points")
         .eq("id", reqRow.volunteer_id)
         .maybeSingle();
 
-      if (vErr) throw vErr;
-      if (!vRow?.id) return bad(res, 404, "volunteer not found");
+      if (volErr) return send(res, 500, { error: volErr.message });
+      if (!vol) return send(res, 404, { error: "Volunteer not found" });
 
-      const used = Number(reqRow.points_used ?? 0);
-      const currentPoints = Number(vRow.points ?? 0);
-      if (currentPoints < used) return bad(res, 400, `points not enough (have=${currentPoints}, need=${used})`);
+      const current = Number(vol.points ?? 0);
+      const refunded = current + pointsUsed;
 
+      const { error: updVolErr } = await supabase
+        .from("volunteers")
+        .update({ points: refunded })
+        .eq("id", vol.id);
+
+      if (updVolErr) return send(res, 500, { error: updVolErr.message });
+
+      // 2) mark rejected
       const { error: updReqErr } = await supabase
         .from("redemption_requests")
-        .update({ status: "APPROVED", admin_note: note || "Approved by admin" })
+        .update({
+          status: "REJECTED",
+          rejected_at: nowIso,
+          rejected_by: String(payload?.volunteer_code ?? payload?.volunteer_id ?? "ADMIN"),
+          reject_reason: String(body.reject_reason ?? "").trim() || null,
+        })
         .eq("id", request_id);
-      if (updReqErr) throw updReqErr;
 
-      const { error: updStockErr } = await supabase
-        .from("rewards")
-        .update({ stock: stock - qty })
-        .eq("id", reqRow.reward_id);
-      if (updStockErr) throw updStockErr;
+      if (updReqErr) return send(res, 500, { error: updReqErr.message });
 
-      const { error: updPointsErr } = await supabase
-        .from("volunteers")
-        .update({ points: currentPoints - used })
-        .eq("id", vRow.id);
-      if (updPointsErr) throw updPointsErr;
-
-      await supabase.from("point_transactions").insert({
+      // 3) log refund
+      const { error: txErr } = await supabase.from("point_transactions").insert({
         from_volunteer_id: null,
-        to_volunteer_id: vRow.id,
-        amount: used,
-        type: "deduct", // ✅ แนะนำใช้ deduct (กันชน enum/constraint)
-        note: note || `redeem ${reqRow.reward_id} x${qty}`,
+        to_volunteer_id: reqRow.volunteer_id,
+        amount: pointsUsed,
+        type: "redeem_refund",
+        note: `redeem rejected refund: ${reqRow.reward_title ?? ""}`.trim(),
       });
 
-      return ok(res, { request_id, status: "APPROVED", deducted: used, stock_after: stock - qty });
-    }
+      if (txErr) console.error("[admin redemptions] refund tx log error:", txErr);
 
-    return bad(res, 405, "Method not allowed");
+      return send(res, 200, {
+        ok: true,
+        result: { request_id, status: "REJECTED", refunded_points: pointsUsed, points_after: refunded },
+      });
+    }
   } catch (e: any) {
     console.error("[api/admin/redemptions] error:", e);
-    return bad(res, 500, e?.message || "Internal Server Error", {
-      hint:
-        "Check env SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY and schema: redemption_requests(volunteer_id,reward_id,points_used), rewards(title,stock,image_url), volunteers(id,volunteer_code,name,branch,points)",
-    });
+    return send(res, 500, { error: e?.message || "Unknown error" });
   }
 }
