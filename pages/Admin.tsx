@@ -598,7 +598,7 @@ export const Admin: React.FC = () => {
           </button>
 
           <div className="mt-4 text-xs text-gray-400">
-            * รหัสตั้งจาก VITE_ADMIN_PASSCODE (ถ้าไม่ตั้งจะใช้ NTL-Volunteer-2569)
+            * อย่ามาจับหนูน้าาาา (หมูเด้ง)
           </div>
         </div>
       </div>
