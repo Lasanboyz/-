@@ -785,7 +785,19 @@ export type AdminRedemptionRow = {
 // --- token helper (Admin endpoint ต้องใช้ JWT Bearer) ---
 function getStoredJwt(): string | null {
   // รองรับหลายชื่อ เผื่อโปรเจกต์เก็บ token คนละ key
-  const keys = ["app_token", "auth_token", "jwt", "token", "volunteer_token"];
+  // ✅ เพิ่ม admin_jwt_token_v1 (ที่หน้า Admin ใช้อยู่จริง)
+  const keys = [
+    "admin_jwt_token_v1",
+    "admin_jwt_token",
+    "admin_token",
+
+    "app_token",
+    "auth_token",
+    "jwt",
+    "token",
+    "volunteer_token",
+  ];
+
   for (const k of keys) {
     const v = localStorage.getItem(k);
     if (v && String(v).trim()) return String(v).trim();
