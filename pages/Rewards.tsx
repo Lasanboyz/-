@@ -4,6 +4,13 @@ import { useNavigate } from "react-router-dom";
 import { ArrowLeft, CheckCircle, Phone, X, Loader2 } from "lucide-react";
 import { fetchVolunteerPointsByCode } from "../services/dataService";
 
+// ✅ Local images (Vite: import from src/assets)
+import bagImg from "../src/assets/กระเป๋าภารกิจคนอาสา.png";
+import fanImg from "../src/assets/พัดลมพลังช้าง.png";
+import umbrellaImg from "../src/assets/ร่มนักสู้แดดฝน.png";
+import hatImg from "../src/assets/หมวกกันแดดสายเท่.png";
+import richGlassImg from "../src/assets/แก้วน้ำคนรวย.png";
+
 type AuthVolunteer = {
   id: string;
   volunteer_code: string;
@@ -42,6 +49,35 @@ type PendingReq = {
   created_at: string;
 };
 
+// ✅ Map: reward title keyword -> local image
+const rewardImages: Record<string, string> = {
+  "กระเป๋าภารกิจคนอาสา": bagImg,
+  "แก้วน้ำคนรวย": richGlassImg,
+  "พัดลมพลังช้าง": fanImg,
+  "ร่มนักสู้แดดฝน": umbrellaImg,
+  "หมวกกันแดดสายเท่": hatImg,
+};
+
+// ✅ Safe placeholder (no external URL)
+const placeholderSvg =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent(`
+  <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800">
+    <rect width="100%" height="100%" fill="#f3f4f6"/>
+    <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle"
+      font-family="Arial" font-size="36" fill="#9ca3af">
+      NO IMAGE
+    </text>
+  </svg>
+`);
+
+const getLocalRewardImage = (title: string): string | null => {
+  if (!title) return null;
+  // match by "includes" so you don't need exact full title
+  const hit = Object.entries(rewardImages).find(([key]) => title.includes(key));
+  return hit?.[1] ?? null;
+};
+
 export const Rewards: React.FC = () => {
   const navigate = useNavigate();
 
@@ -57,7 +93,9 @@ export const Rewards: React.FC = () => {
   const token = useMemo(() => localStorage.getItem("auth_token") || "", []);
 
   const [rewards, setRewards] = useState<RewardUI[]>([]);
-  const [currentPoints, setCurrentPoints] = useState<number>(() => Number(me?.points ?? 0));
+  const [currentPoints, setCurrentPoints] = useState<number>(() =>
+    Number(me?.points ?? 0)
+  );
 
   const [pendingRequests, setPendingRequests] = useState<PendingReq[]>([]);
   const [successMsg, setSuccessMsg] = useState("");
@@ -72,9 +110,6 @@ export const Rewards: React.FC = () => {
   const [redeemLoading, setRedeemLoading] = useState(false);
 
   const normalizePhone = (s: string) => s.replace(/\s+/g, "").trim();
-
-  const defaultImg =
-    "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=1200&auto=format&fit=crop";
 
   // ✅ ดึงแต้มจริงจาก DB แล้ว sync กลับไป localStorage
   const refreshPointsFromDb = async (overrideMe?: AuthVolunteer | null) => {
@@ -137,16 +172,20 @@ export const Rewards: React.FC = () => {
         const d1 = await r1.json().catch(() => ({}));
         if (!r1.ok) throw new Error(d1?.error || "โหลดรายการของรางวัลไม่สำเร็จ");
 
-        const mapped: RewardUI[] = (d1?.rewards || []).map((x: ApiReward) => ({
-          id: x.id,
-          name: x.title,
-          description: x.description ?? null,
-          cost: Number(x.cost_points ?? 0),
-          stock: Number(x.stock ?? 0),
-          imageUrl: x.image_url || defaultImg,
-        }));
+        const mapped: RewardUI[] = (d1?.rewards || []).map((x: ApiReward) => {
+          const localImg = getLocalRewardImage(x.title);
+          return {
+            id: x.id,
+            name: x.title,
+            description: x.description ?? null,
+            cost: Number(x.cost_points ?? 0),
+            stock: Number(x.stock ?? 0),
+            // ✅ Priority: local image > DB image_url > placeholder
+            imageUrl: localImg || x.image_url || placeholderSvg,
+          };
+        });
 
-        // 2) pending requests (ถ้ามี endpoint นี้)
+        // 2) pending requests
         let pending: PendingReq[] = [];
         try {
           const r2 = await fetch("/api/rewards/myRequests", {
@@ -159,7 +198,9 @@ export const Rewards: React.FC = () => {
 
           const d2 = await r2.json().catch(() => ({}));
           if (r2.ok) {
-            pending = (d2?.requests || []).filter((x: PendingReq) => x.status === "PENDING");
+            pending = (d2?.requests || []).filter(
+              (x: PendingReq) => x.status === "PENDING"
+            );
           }
         } catch {
           pending = [];
@@ -170,7 +211,7 @@ export const Rewards: React.FC = () => {
         setRewards(mapped);
         setPendingRequests(pending);
 
-        // 3) refresh points from DB (หลัง) เผื่อมีอะไรเปลี่ยนระหว่างโหลด
+        // 3) refresh points from DB (หลัง)
         await refreshPointsFromDb();
       } catch (e: any) {
         if (!cancelled) setLoadError(e?.message ?? "โหลดข้อมูลไม่สำเร็จ");
@@ -247,7 +288,7 @@ export const Rewards: React.FC = () => {
       // ✅ หลังแลก: ให้ยึดแต้มจริงจาก DB (กันไม่ตรง)
       await refreshPointsFromDb();
 
-      // เพิ่ม pending list ทันที (ให้ UX เห็นว่า “ส่งคำขอแล้ว”)
+      // เพิ่ม pending list ทันที
       const reqId = data?.request?.id || data?.request_id || "req_" + Date.now();
       const createdAt = data?.request?.created_at || new Date().toISOString();
 
@@ -268,19 +309,22 @@ export const Rewards: React.FC = () => {
       window.scrollTo({ top: 0, behavior: "smooth" });
       window.setTimeout(() => setSuccessMsg(""), 4000);
 
-      // refresh rewards stock (optional) — โหลดใหม่แบบเบาๆ
+      // refresh rewards stock — โหลดใหม่แบบเบาๆ
       try {
         const r1 = await fetch("/api/rewards/list");
         const d1 = await r1.json().catch(() => ({}));
         if (r1.ok) {
-          const mapped: RewardUI[] = (d1?.rewards || []).map((x: ApiReward) => ({
-            id: x.id,
-            name: x.title,
-            description: x.description ?? null,
-            cost: Number(x.cost_points ?? 0),
-            stock: Number(x.stock ?? 0),
-            imageUrl: x.image_url || defaultImg,
-          }));
+          const mapped: RewardUI[] = (d1?.rewards || []).map((x: ApiReward) => {
+            const localImg = getLocalRewardImage(x.title);
+            return {
+              id: x.id,
+              name: x.title,
+              description: x.description ?? null,
+              cost: Number(x.cost_points ?? 0),
+              stock: Number(x.stock ?? 0),
+              imageUrl: localImg || x.image_url || placeholderSvg,
+            };
+          });
           setRewards(mapped);
         }
       } catch {
@@ -433,7 +477,12 @@ export const Rewards: React.FC = () => {
                 className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden flex flex-col hover:shadow-md transition"
               >
                 <div className="h-48 bg-gray-100 relative">
-                  <img src={reward.imageUrl} alt={reward.name} className="w-full h-full object-cover" loading="lazy" />
+                  <img
+                    src={reward.imageUrl}
+                    alt={reward.name}
+                    className="w-full h-full object-cover"
+                    loading="lazy"
+                  />
 
                   <div className="absolute top-3 left-3 flex gap-2">
                     {isPending && (
@@ -456,7 +505,9 @@ export const Rewards: React.FC = () => {
                 <div className="p-4 flex-grow flex flex-col justify-between">
                   <div>
                     <h3 className="font-extrabold text-gray-900 text-lg leading-snug">{reward.name}</h3>
-                    {reward.description && <p className="mt-1 text-xs text-gray-500 line-clamp-2">{reward.description}</p>}
+                    {reward.description && (
+                      <p className="mt-1 text-xs text-gray-500 line-clamp-2">{reward.description}</p>
+                    )}
 
                     <div className="mt-2 flex items-center justify-between">
                       <div className="text-pink-600 font-extrabold text-xl">
@@ -503,7 +554,8 @@ export const Rewards: React.FC = () => {
             <div className="mb-5">
               <h3 className="text-xl font-extrabold text-gray-900 mb-1">ยืนยันการแลกรางวัล</h3>
               <p className="text-gray-500 text-sm">
-                “{selectedReward.name}” ใช้ <span className="font-bold text-pink-600">{selectedReward.cost}</span> คะแนน
+                “{selectedReward.name}” ใช้{" "}
+                <span className="font-bold text-pink-600">{selectedReward.cost}</span> คะแนน
               </p>
             </div>
 
