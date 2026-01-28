@@ -383,35 +383,34 @@ export async function transferPoints(params: {
 }) {
   const fromCode = String(params.fromVolunteerCode ?? "").trim().toUpperCase();
   const toCode = String(params.toVolunteerCode ?? "").trim().toUpperCase();
-  const amount = Number(params.amount ?? 0);
+  const amount = Math.floor(Number(params.amount ?? 0));
   const note = String(params.note ?? "").trim();
 
   if (!fromCode || !toCode) throw new Error("กรุณากรอกรหัสผู้โอน/ผู้รับให้ครบ");
   if (fromCode === toCode) throw new Error("ห้ามโอนให้รหัสเดียวกัน");
   if (!Number.isFinite(amount) || amount <= 0) throw new Error("จำนวนแต้มต้องมากกว่า 0");
 
-  const [fromV, toV] = await Promise.all([getVolunteerByCodeForPoints(fromCode), getVolunteerByCodeForPoints(toCode)]);
-
-  if (!fromV) throw new Error(`ไม่พบผู้โอน: ${fromCode}`);
-  if (!toV) throw new Error(`ไม่พบผู้รับ: ${toCode}`);
-
-  const fromPoints = Number(fromV.points ?? 0);
-  if (amount > fromPoints) throw new Error(`แต้มไม่พอ (คงเหลือ ${fromPoints})`);
-
-  const { data, error } = await supabase
-    .from("point_transactions")
-    .insert({
-      from_volunteer_id: fromV.id,
-      to_volunteer_id: toV.id,
-      amount,
-      type: "transfer",
-      note: note || `transfer ${fromCode} -> ${toCode}`,
-    })
-    .select("*")
-    .maybeSingle();
+  // ✅ ให้ DB ทำทั้งหมด: lock + check PENDING + ตัด/บวก points + insert log
+  const { data, error } = await supabase.rpc("transfer_points_atomic", {
+    p_from_code: fromCode,
+    p_to_code: toCode,
+    p_amount: amount,
+    p_note: note || null,
+  });
 
   if (error) {
-    console.error("[Supabase] transferPoints insert error:", error);
+    console.error("[Supabase] transfer_points_atomic error:", error);
+
+    const msg = String(error.message || "").toLowerCase();
+
+    if (msg.includes("insufficient points")) {
+      // มักเกิดจากมีรายการแลกของรางวัล PENDING ล็อกแต้มไว้
+      throw new Error("แต้มไม่พอ (มีแต้มที่ถูกล็อกจากการแลกรางวัลที่รออนุมัติ)");
+    }
+    if (msg.includes("cannot transfer to yourself")) throw new Error("ห้ามโอนให้ตัวเอง");
+    if (msg.includes("from not found")) throw new Error(`ไม่พบผู้โอน: ${fromCode}`);
+    if (msg.includes("to not found")) throw new Error(`ไม่พบผู้รับ: ${toCode}`);
+
     throw new Error(error.message);
   }
 
