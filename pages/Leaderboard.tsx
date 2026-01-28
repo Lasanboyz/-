@@ -70,7 +70,7 @@ export const Leaderboard: React.FC = () => {
             id: empId || crypto.randomUUID(), // กัน key ว่าง
             empId,
             name: r.name ?? "",
-            type: r.branch ?? "",
+            type: r.branch ?? "", // 👈 ใช้เป็นสาขา
             ...(typeof r.is_staff === "boolean" ? { isStaff: r.is_staff } : {}),
           } as any;
 
@@ -209,79 +209,137 @@ export const Leaderboard: React.FC = () => {
           </div>
         ) : (
           <div className="divide-y divide-gray-50">
-            {visibleItems.map((item, index) => (
-              <div
-                key={`${item.volunteer.empId}_${index}`}
-                className="p-4 flex items-center gap-4 hover:bg-pink-50/50 transition animate-fade-in-up"
-                style={{ animationDelay: `${index * 0.05}s` }}
-              >
+            {visibleItems.map((item, index) => {
+              const isTop3 = index < 3;
+              const isTop1 = index === 0;
+              const isTop2 = index === 1;
+              const isTop3rd = index === 2;
+
+              const name = (item.volunteer.name ?? "").trim();
+              const branch = (item.volunteer.type ?? "").trim();
+              const nameWithBranch =
+                name && branch ? `${name} • ${branch}` : name || branch || "";
+
+              // Glow พื้นหลัง Top 3 (ใช้ gradient แบบนุ่มๆ)
+              const topGlow =
+                isTop1
+                  ? "bg-gradient-to-r from-yellow-50 via-amber-50 to-white"
+                  : isTop2
+                  ? "bg-gradient-to-r from-slate-50 via-gray-50 to-white"
+                  : isTop3rd
+                  ? "bg-gradient-to-r from-orange-50 via-amber-50 to-white"
+                  : "";
+
+              // ring highlight
+              const topRing =
+                isTop1
+                  ? "ring-1 ring-yellow-200"
+                  : isTop2
+                  ? "ring-1 ring-gray-200"
+                  : isTop3rd
+                  ? "ring-1 ring-orange-200"
+                  : "";
+
+              // crown color
+              const crownColor =
+                isTop1
+                  ? "text-yellow-600"
+                  : isTop2
+                  ? "text-gray-500"
+                  : "text-orange-600";
+
+              return (
                 <div
-                  className={`w-10 h-10 flex-shrink-0 flex items-center justify-center rounded-full font-bold text-lg ${
-                    index === 0
-                      ? "bg-yellow-100 text-yellow-600 shadow-sm"
-                      : index === 1
-                      ? "bg-gray-100 text-gray-600 shadow-sm"
-                      : index === 2
-                      ? "bg-orange-100 text-orange-600 shadow-sm"
-                      : "bg-white text-gray-400 border border-gray-100"
-                  }`}
+                  key={`${item.volunteer.empId}_${index}`}
+                  className={`p-4 flex items-center gap-4 hover:bg-pink-50/50 transition animate-fade-in-up relative ${topGlow} ${topRing}`}
+                  style={{ animationDelay: `${index * 0.05}s` }}
                 >
-                  {index < 3 ? <Medal size={20} /> : index + 1}
-                </div>
-
-                {/* ✅ รหัส + ชื่อ */}
-                <div className="flex-grow min-w-0">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="font-mono text-lg font-bold text-gray-800">
-                      {item.volunteer.empId}
-                    </span>
-
-                    {item.volunteer.name?.trim() ? (
-                      <span className="text-sm font-semibold text-gray-700 truncate">
-                        {item.volunteer.name}
-                      </span>
-                    ) : null}
-                  </div>
-
-                  <div className="flex items-center gap-2 mt-1">
-                    <span
-                      className={`text-[10px] px-2 py-0.5 rounded-full ${item.rank.color} flex items-center gap-1`}
-                    >
-                      {item.rank.icon} {item.rank.name}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="text-right flex-shrink-0 flex flex-col items-end">
-                  {highlightActivityCount ? (
-                    <>
-                      <div className="flex items-center gap-1 text-2xl font-bold text-pink-600 leading-none">
-                        {item.activityCount}
-                        <span className="text-sm font-medium text-gray-500 mt-1">ครั้ง</span>
-                      </div>
-
-                      {!isNoScoreYear ? (
-                        <div className="mt-1 text-[10px] text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
-                          รวม {item.points} คะแนน
-                        </div>
-                      ) : (
-                        <div className="mt-1 text-[10px] text-gray-300">ไม่นำคะแนนมาคิด</div>
-                      )}
-                    </>
-                  ) : (
-                    <>
-                      <div className="flex items-center gap-1 text-2xl font-bold text-primary leading-none">
-                        {item.points}
-                        <span className="text-sm font-medium text-gray-500 mt-1">คะแนน</span>
-                      </div>
-                      <div className="mt-1 text-xs text-pink-600 bg-pink-50 px-2 py-0.5 rounded-full flex items-center gap-1">
-                        <Flag size={10} /> {item.activityCount} ครั้ง
-                      </div>
-                    </>
+                  {/* crown icon on Top 3 */}
+                  {isTop3 && (
+                    <div className="absolute top-2 right-2 opacity-90">
+                      <Trophy size={18} className={crownColor} />
+                    </div>
                   )}
+
+                  <div
+                    className={`w-10 h-10 flex-shrink-0 flex items-center justify-center rounded-full font-bold text-lg ${
+                      isTop1
+                        ? "bg-yellow-100 text-yellow-600 shadow-sm"
+                        : isTop2
+                        ? "bg-gray-100 text-gray-600 shadow-sm"
+                        : isTop3rd
+                        ? "bg-orange-100 text-orange-600 shadow-sm"
+                        : "bg-white text-gray-400 border border-gray-100"
+                    }`}
+                  >
+                    {isTop3 ? <Medal size={20} /> : index + 1}
+                  </div>
+
+                  {/* ✅ Mobile Pro + ชื่อ • สาขา */}
+                  <div className="flex-grow min-w-0">
+                    <div className="min-w-0">
+                      {/* แถวบน: รหัส */}
+                      <div className="flex items-baseline gap-2 min-w-0">
+                        <span className="font-mono text-lg font-bold text-gray-800">
+                          {item.volunteer.empId}
+                        </span>
+
+                        {/* จอใหญ่: โชว์ชื่อ • สาขา ข้างๆรหัส */}
+                        {nameWithBranch ? (
+                          <span className="hidden sm:inline text-sm font-semibold text-gray-700 truncate">
+                            {nameWithBranch}
+                          </span>
+                        ) : null}
+                      </div>
+
+                      {/* มือถือ: โชว์ชื่อ • สาขา บรรทัดใหม่ */}
+                      {nameWithBranch ? (
+                        <div className="sm:hidden text-sm text-gray-600 truncate -mt-0.5">
+                          {nameWithBranch}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="flex items-center gap-2 mt-1">
+                      <span
+                        className={`text-[10px] px-2 py-0.5 rounded-full ${item.rank.color} flex items-center gap-1`}
+                      >
+                        {item.rank.icon} {item.rank.name}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="text-right flex-shrink-0 flex flex-col items-end">
+                    {highlightActivityCount ? (
+                      <>
+                        <div className="flex items-center gap-1 text-2xl font-bold text-pink-600 leading-none">
+                          {item.activityCount}
+                          <span className="text-sm font-medium text-gray-500 mt-1">ครั้ง</span>
+                        </div>
+
+                        {!isNoScoreYear ? (
+                          <div className="mt-1 text-[10px] text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
+                            รวม {item.points} คะแนน
+                          </div>
+                        ) : (
+                          <div className="mt-1 text-[10px] text-gray-300">ไม่นำคะแนนมาคิด</div>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-1 text-2xl font-bold text-primary leading-none">
+                          {item.points}
+                          <span className="text-sm font-medium text-gray-500 mt-1">คะแนน</span>
+                        </div>
+                        <div className="mt-1 text-xs text-pink-600 bg-pink-50 px-2 py-0.5 rounded-full flex items-center gap-1">
+                          <Flag size={10} /> {item.activityCount} ครั้ง
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
