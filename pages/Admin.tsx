@@ -147,7 +147,7 @@ async function apiListRedemptions(params: { status: RedemptionStatus; search?: s
     const msg = json?.error || `HTTP ${res.status}`;
     throw new Error(msg);
   }
-  return (json?.data ?? []) as AdminRedemptionRow[];
+  return (json?.rows ?? []) as AdminRedemptionRow[];
 }
 
 async function apiActRedemption(params: { action: "approve" | "reject"; request_id: string; note?: string; jwt: string }) {
@@ -169,7 +169,7 @@ async function apiActRedemption(params: { action: "approve" | "reject"; request_
     const msg = json?.error || `HTTP ${res.status}`;
     throw new Error(msg);
   }
-  return json?.data;
+  return json?.result;
 }
 
 export const Admin: React.FC = () => {
