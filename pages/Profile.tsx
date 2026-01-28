@@ -178,6 +178,22 @@ const mapTxViewToTransaction = (t: TxViewRow, myVolunteerId: string): Transactio
         setLoading(true);
         setErrorMsg(null);
 
+        const authedCode = (localStorage.getItem("auth_volunteer_code") || "")
+      .trim()
+      .toUpperCase();
+
+    if (!authedCode) {
+      setErrorMsg("กรุณาเข้าสู่ระบบก่อน");
+      setLoading(false);
+      return;
+    }
+
+    if (authedCode !== volunteerCode) {
+      setErrorMsg("ไม่มีสิทธิ์เข้าถึงโปรไฟล์นี้");
+      setLoading(false);
+      return;
+    }
+        
         const vRow = await fetchVolunteerByCode(volunteerCode);
         if (cancelled) return;
 
