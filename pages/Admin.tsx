@@ -137,39 +137,30 @@ async function apiListRedemptions(params: { status: RedemptionStatus; search?: s
 
   const res = await fetch(`/api/admin/redemptions?${qs.toString()}`, {
     method: "GET",
-    headers: {
-      Authorization: `Bearer ${params.jwt}`,
-    },
+    headers: { Authorization: `Bearer ${params.jwt}` },
   });
 
   const json = await res.json().catch(() => ({}));
-  if (!res.ok || json?.ok === false) {
-    const msg = json?.error || `HTTP ${res.status}`;
-    throw new Error(msg);
-  }
-  return (json?.rows ?? []) as AdminRedemptionRow[];
+  if (!res.ok || json?.ok === false) throw new Error(json?.error || `HTTP ${res.status}`);
+
+  return (json?.rows ?? []) as AdminRedemptionRow[]; // ✅ rows
 }
 
 async function apiActRedemption(params: { action: "approve" | "reject"; request_id: string; note?: string; jwt: string }) {
   const res = await fetch(`/api/admin/redemptions`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${params.jwt}`,
-    },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${params.jwt}` },
     body: JSON.stringify({
       action: params.action,
       request_id: params.request_id,
-      note: params.note || "",
+      reject_reason: params.note || "", // ✅ ฝั่ง API ใช้ reject_reason (ไม่ใช่ note)
     }),
   });
 
   const json = await res.json().catch(() => ({}));
-  if (!res.ok || json?.ok === false) {
-    const msg = json?.error || `HTTP ${res.status}`;
-    throw new Error(msg);
-  }
-  return json?.result;
+  if (!res.ok || json?.ok === false) throw new Error(json?.error || `HTTP ${res.status}`);
+
+  return json?.result; // ✅ result
 }
 
 export const Admin: React.FC = () => {
