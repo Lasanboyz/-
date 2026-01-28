@@ -10,6 +10,7 @@ import {
   X,
   AlertTriangle,
   User,
+  Lock,
 } from "lucide-react";
 
 import { supabase as supabaseClient } from "../services/supabaseClient";
@@ -23,8 +24,63 @@ import {
 import type { Volunteer, Transaction, RankConfig } from "../types";
 
 const POINTS_PER_ACTIVITY = 20;
-
 type TxViewRow = any; // point_transactions_view row
+
+// -------------------------------
+// ✅ Auth helpers
+// -------------------------------
+function normalizeCode(v: any) {
+  return String(v ?? "").trim().replace(/\s+/g, "").toUpperCase();
+}
+
+function getStoredToken(): string | null {
+  const keys = [
+    "app_token",
+    "auth_token",
+    "volunteer_token",
+    "token",
+    "jwt",
+    "admin_jwt_token_v1",
+    "admin_jwt_token",
+  ];
+  for (const k of keys) {
+    const v = localStorage.getItem(k);
+    if (v && String(v).trim()) return String(v).trim();
+  }
+  return null;
+}
+
+// อ่าน volunteer_code จาก JWT (ไม่ verify signature ฝั่ง client—ใช้เพื่อ UX/permission เฉยๆ)
+function getAuthedVolunteerCodeFromJwt(): string | null {
+  const token = getStoredToken();
+  if (!token) return null;
+
+  try {
+    const payloadBase64Url = token.split(".")[1];
+    if (!payloadBase64Url) return null;
+
+    const payloadBase64 = payloadBase64Url.replace(/-/g, "+").replace(/_/g, "/");
+    const jsonStr = decodeURIComponent(
+      atob(payloadBase64)
+        .split("")
+        .map((c) => "%" + c.charCodeAt(0).toString(16).padStart(2, "0"))
+        .join("")
+    );
+
+    const payload = JSON.parse(jsonStr);
+    const code = normalizeCode(payload?.volunteer_code);
+    return code || null;
+  } catch {
+    return null;
+  }
+}
+
+function getAuthedVolunteerCode(): string {
+  // รองรับทั้งแบบเก็บโค้ดไว้ตรงๆ และแบบดึงจาก JWT
+  const fromStorage = normalizeCode(localStorage.getItem("auth_volunteer_code"));
+  const fromJwt = normalizeCode(getAuthedVolunteerCodeFromJwt());
+  return fromStorage || fromJwt || "";
+}
 
 export const Profile: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -47,10 +103,15 @@ export const Profile: React.FC = () => {
 
   const [reloadTick, setReloadTick] = useState(0);
 
+  // URL code
   const volunteerCode = useMemo(() => {
     if (!id) return "";
-    return id.replace(/^v_/, "").trim().toUpperCase();
+    return normalizeCode(id.replace(/^v_/, ""));
   }, [id]);
+
+  // Logged-in code
+  const authedCode = useMemo(() => getAuthedVolunteerCode(), []);
+  const isOwner = useMemo(() => !!authedCode && authedCode === volunteerCode, [authedCode, volunteerCode]);
 
   const isNoScoreYear = selectedYear >= 2557 && selectedYear <= 2568;
 
@@ -98,7 +159,7 @@ export const Profile: React.FC = () => {
       .reduce((sum, t) => {
         if (t.thaiYear >= 2557 && t.thaiYear <= 2568) return sum;
 
-        // ✅ กันบวกซ้ำจากกิจกรรม (Activity จะไม่เอามานับรวมแต้มปี เพราะ DB points เป็นตัวจริง)
+        // กันบวกซ้ำจากกิจกรรม (Activity ไม่นับรวมแต้มปี เพราะ DB points เป็นตัวจริง)
         if (String(t.type).toUpperCase() === "ACTIVITY") return sum;
 
         return sum + Number(t.amount ?? 0);
@@ -109,60 +170,47 @@ export const Profile: React.FC = () => {
     return txs.filter((t) => t.type === "ACTIVITY" && t.thaiYear === year).length;
   };
 
-// ✅ map point_transactions_view -> Transaction (handle transfer/deduct/adjustment/redeem)
-const mapTxViewToTransaction = (t: TxViewRow, myVolunteerId: string): Transaction => {
-  const txType = String(t.type ?? "transfer").toLowerCase(); // transfer | deduct | adjustment | redeem
-  const amountAbs = Math.abs(Number(t.amount ?? 0));
-  const createdAt = t.created_at ?? new Date().toISOString();
-  const thaiYear = toThaiYearFromDate(createdAt);
+  // map point_transactions_view -> Transaction
+  const mapTxViewToTransaction = (t: TxViewRow, myVolunteerId: string): Transaction => {
+    const txType = String(t.type ?? "transfer").toLowerCase(); // transfer | deduct | adjustment | redeem
+    const amountAbs = Math.abs(Number(t.amount ?? 0));
+    const createdAt = t.created_at ?? new Date().toISOString();
+    const thaiYear = toThaiYearFromDate(createdAt);
 
-  const fromId = t.from_volunteer_id ?? null;
-  const toId = t.to_volunteer_id ?? null;
+    const fromId = t.from_volunteer_id ?? null;
+    const toId = t.to_volunteer_id ?? null;
 
-  // ออก/เข้า สำหรับ transfer (เท่านั้น)
-  const isOut = fromId && String(fromId) === String(myVolunteerId);
+    const isOut = fromId && String(fromId) === String(myVolunteerId);
 
-  let signedAmount = amountAbs;
+    let signedAmount = amountAbs;
 
-  if (txType === "transfer") {
-    signedAmount = isOut ? -amountAbs : +amountAbs;
-  } else if (txType === "deduct") {
-    signedAmount = -amountAbs;
-  } else if (txType === "adjustment") {
-    signedAmount = +amountAbs;
-  } else if (txType === "redeem") {
-    // ✅ แลกของรางวัล = แต้มออกเสมอ
-    signedAmount = -amountAbs;
-  } else {
-    // เผื่อ type อื่นๆในอนาคต: ถ้า from เป็นเราให้ถือว่าออก
-    if (fromId && String(fromId) === String(myVolunteerId)) signedAmount = -amountAbs;
-  }
+    if (txType === "transfer") signedAmount = isOut ? -amountAbs : +amountAbs;
+    else if (txType === "deduct") signedAmount = -amountAbs;
+    else if (txType === "adjustment") signedAmount = +amountAbs;
+    else if (txType === "redeem") signedAmount = -amountAbs;
+    else if (fromId && String(fromId) === String(myVolunteerId)) signedAmount = -amountAbs;
 
-  let desc = t.note ?? "-";
-  if (txType === "transfer") {
-    desc = isOut
-      ? `โอนให้ ${t.to_name ?? t.to_volunteer_code ?? "-"}`
-      : `ได้รับจาก ${t.from_name ?? t.from_volunteer_code ?? "-"}`;
-  } else if (txType === "deduct") {
-    desc = `หักแต้ม • ${t.note ?? "admin deduct"}`;
-  } else if (txType === "adjustment") {
-    desc = `ปรับแต้ม • ${t.note ?? "admin give"}`;
-  } else if (txType === "redeem") {
-    desc = `แลกรางวัล • ${t.note ?? "redeem"}`;
-  }
+    let desc = t.note ?? "-";
+    if (txType === "transfer") {
+      desc = isOut
+        ? `โอนให้ ${t.to_name ?? t.to_volunteer_code ?? "-"}`
+        : `ได้รับจาก ${t.from_name ?? t.from_volunteer_code ?? "-"}`;
+    } else if (txType === "deduct") desc = `หักแต้ม • ${t.note ?? "admin deduct"}`;
+    else if (txType === "adjustment") desc = `ปรับแต้ม • ${t.note ?? "admin give"}`;
+    else if (txType === "redeem") desc = `แลกรางวัล • ${t.note ?? "redeem"}`;
 
-  return {
-    id: t.id,
-    volunteerId: myVolunteerId,
-    amount: signedAmount,
-    type: txType.toUpperCase(), // TRANSFER | DEDUCT | ADJUSTMENT | REDEEM
-    description: desc,
-    date: createdAt,
-    thaiYear,
-    createdBy: "system",
-    relatedId: isOut ? toId : fromId,
-  } as any;
-};
+    return {
+      id: t.id,
+      volunteerId: myVolunteerId,
+      amount: signedAmount,
+      type: txType.toUpperCase(),
+      description: desc,
+      date: createdAt,
+      thaiYear,
+      createdBy: "system",
+      relatedId: isOut ? toId : fromId,
+    } as any;
+  };
 
   useEffect(() => {
     if (!volunteerCode) {
@@ -178,22 +226,18 @@ const mapTxViewToTransaction = (t: TxViewRow, myVolunteerId: string): Transactio
         setLoading(true);
         setErrorMsg(null);
 
-        const authedCode = (localStorage.getItem("auth_volunteer_code") || "")
-      .trim()
-      .toUpperCase();
+        // ✅ ต้องล็อกอินก่อนถึงจะดูโปรไฟล์ได้
+        if (!authedCode) {
+          setErrorMsg("กรุณาเข้าสู่ระบบก่อน");
+          setVolunteer(null);
+          setTransactions([]);
+          setAnnualPoints(0);
+          setTotalPoints(0);
+          setRank(null);
+          return;
+        }
 
-    if (!authedCode) {
-      setErrorMsg("กรุณาเข้าสู่ระบบก่อน");
-      setLoading(false);
-      return;
-    }
-
-    if (authedCode !== volunteerCode) {
-      setErrorMsg("ไม่มีสิทธิ์เข้าถึงโปรไฟล์นี้");
-      setLoading(false);
-      return;
-    }
-        
+        // ✅ โหลดข้อมูลโปรไฟล์ได้ “ทุกคน” (read-only) แต่การโอนจะถูกล็อกถ้าไม่ใช่ owner
         const vRow = await fetchVolunteerByCode(volunteerCode);
         if (cancelled) return;
 
@@ -246,7 +290,7 @@ const mapTxViewToTransaction = (t: TxViewRow, myVolunteerId: string): Transactio
           };
         });
 
-        // 2) point_transactions_view -> TRANSFER/DEDUCT/ADJUSTMENT
+        // 2) point_transactions_view -> TRANSFER/DEDUCT/ADJUSTMENT/REDEEM
         const { data: txData, error: txError } = await supabaseClient
           .from("point_transactions_view")
           .select("*")
@@ -265,7 +309,8 @@ const mapTxViewToTransaction = (t: TxViewRow, myVolunteerId: string): Transactio
 
         setTransactions(allTx);
 
-        // ✅ totalPoints ยึด DB points เป็นหลัก
+        // ✅ totalPoints: ถ้าเป็น owner -> ดึงแต้มจริงจาก DB
+        // ถ้าไม่ใช่ owner -> ยังแสดงแต้มได้ (ตามที่เควินบอกว่า "อาจดูได้") แต่ผมแนะนำให้โชว์ได้เหมือนเดิม
         const latest = await fetchVolunteerPointsByCode(volunteerCode);
         const totalFromDb = Number(latest?.points ?? 0);
         setTotalPoints(totalFromDb);
@@ -294,7 +339,7 @@ const mapTxViewToTransaction = (t: TxViewRow, myVolunteerId: string): Transactio
     return () => {
       cancelled = true;
     };
-  }, [volunteerCode, reloadTick]);
+  }, [volunteerCode, reloadTick, authedCode]);
 
   useEffect(() => {
     if (!transactions || transactions.length === 0) {
@@ -315,13 +360,20 @@ const mapTxViewToTransaction = (t: TxViewRow, myVolunteerId: string): Transactio
 
   const handleTransferSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // ✅ กันชั้น UI: ไม่ใช่ owner ห้ามโอน
+    if (!isOwner) {
+      alert("โอนได้เฉพาะบัญชีที่ล็อกอินอยู่เท่านั้น");
+      return;
+    }
+
     if (!volunteer) return;
 
-    const toCode = String(transferReceiverId ?? "").trim().toUpperCase();
+    const toCode = normalizeCode(transferReceiverId);
     const amount = Number(transferAmount ?? 0);
 
     if (!toCode) return alert("กรุณาระบุรหัสพนักงานผู้รับ");
-    if (toCode === String(volunteer.empId).trim().toUpperCase()) return alert("ห้ามโอนให้ตัวเอง");
+    if (toCode === normalizeCode(volunteer.empId)) return alert("ห้ามโอนให้ตัวเอง");
     if (!Number.isFinite(amount) || amount <= 0) return alert("กรุณาระบุจำนวนแต้มที่ถูกต้อง");
     if (amount > Math.max(totalPoints, 0)) return alert(`แต้มไม่พอ (โอนได้สูงสุด ${totalPoints})`);
 
@@ -338,11 +390,12 @@ const mapTxViewToTransaction = (t: TxViewRow, myVolunteerId: string): Transactio
     try {
       setTransferSubmitting(true);
 
+      // ✅ กันอีกชั้น: fromVolunteerCode ต้องเป็น authedCode เสมอ (ไม่ยอมให้โอนแทนคนอื่น)
       await transferPoints({
-        fromVolunteerCode: volunteer.empId,
+        fromVolunteerCode: authedCode,
         toVolunteerCode: toCode,
         amount,
-        note: `transfer by ${volunteer.empId}`,
+        note: `transfer by ${authedCode}`,
       });
 
       setShowTransferModal(false);
@@ -412,6 +465,12 @@ const mapTxViewToTransaction = (t: TxViewRow, myVolunteerId: string): Transactio
 
           <div className="flex flex-wrap items-center gap-3 text-gray-500 mt-2">
             <span className="text-sm">สังกัด: {volunteer.type}</span>
+
+            {!isOwner && (
+              <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-600">
+                <Lock size={14} /> โหมดดูอย่างเดียว (ล็อกอินเป็น {authedCode})
+              </span>
+            )}
           </div>
 
           <div className="mt-6 flex items-center justify-between">
@@ -445,17 +504,34 @@ const mapTxViewToTransaction = (t: TxViewRow, myVolunteerId: string): Transactio
           </div>
 
           <button
-            onClick={() => setShowTransferModal(true)}
-            className="mt-3 w-full bg-blue-600 text-white text-xs py-2 rounded-lg hover:bg-blue-700 flex items-center justify-center gap-1 shadow-sm transition z-10"
+            onClick={() => {
+              if (!isOwner) {
+                alert("โอนได้เฉพาะบัญชีที่ล็อกอินอยู่เท่านั้น");
+                return;
+              }
+              setShowTransferModal(true);
+            }}
+            disabled={!isOwner}
+            className={`mt-3 w-full text-xs py-2 rounded-lg flex items-center justify-center gap-1 shadow-sm transition z-10 ${
+              isOwner
+                ? "bg-blue-600 text-white hover:bg-blue-700"
+                : "bg-gray-200 text-gray-500 cursor-not-allowed"
+            }`}
+            title={isOwner ? "โอนแต้มให้เพื่อน" : "ล็อกอินเป็นเจ้าของบัญชีนี้ก่อนถึงจะโอนได้"}
           >
             <Send size={12} /> โอนแต้มให้เพื่อน
           </button>
+
+          {!isOwner && (
+            <div className="mt-2 text-[11px] text-gray-500 text-center">
+              * โอนได้เฉพาะโปรไฟล์ที่ล็อกอินอยู่ ({authedCode})
+            </div>
+          )}
         </div>
 
-        {/* ✅ เปลี่ยนจาก /rewards/:volunteerCode -> /rewards (ไม่ส่ง code ใน URL แล้ว) */}
         <Link
           to="/rewards"
-          state={{ volunteerCode: volunteer.empId }} // เผื่อหน้า Rewards อยากใช้ (optional)
+          state={{ volunteerCode: volunteer.empId }}
           className="bg-secondary p-4 rounded-xl flex flex-col items-center justify-center text-center text-white hover:bg-pink-400 transition shadow-sm"
         >
           <Gift className="mb-1" size={24} />
@@ -518,7 +594,7 @@ const mapTxViewToTransaction = (t: TxViewRow, myVolunteerId: string): Transactio
         )}
       </div>
 
-      {showTransferModal && (
+      {showTransferModal && isOwner && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-fade-in">
           <div className="bg-white rounded-2xl w-full max-w-sm p-6 relative shadow-2xl">
             <button
