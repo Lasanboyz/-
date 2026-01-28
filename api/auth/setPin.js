@@ -6,19 +6,24 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
+function normalizeCode(code) {
+  return String(code || "").trim().replace(/\s+/g, "").toUpperCase();
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
   try {
-    const { volunteer_code, pin } = req.body || {};
+    let { volunteer_code, pin } = req.body || {};
+    volunteer_code = normalizeCode(volunteer_code);
+    pin = String(pin || "").trim();
 
     if (!volunteer_code || !pin) {
       return res.status(400).json({ error: "volunteer_code and pin required" });
     }
-
-    if (!/^\d{4}$/.test(String(pin))) {
+    if (!/^\d{4}$/.test(pin)) {
       return res.status(400).json({ error: "PIN must be 4 digits" });
     }
 
@@ -32,18 +37,24 @@ export default async function handler(req, res) {
       return res.status(404).json({ error: "Volunteer not found" });
     }
 
-    const hash = await bcrypt.hash(String(pin), 10);
+    // ✅ ตั้งได้ครั้งแรกเท่านั้น
+    if (volunteer.pin_hash) {
+      return res.status(409).json({ error: "PIN already set" });
+    }
 
-    const { error: uErr } = await supabase
+    const hash = await bcrypt.hash(pin, 10);
+
+    // ✅ กัน race + กัน overwrite
+    const { data: updatedRows, error: uErr } = await supabase
       .from("volunteers")
-      .update({
-        pin_hash: hash,
-        pin_set_at: new Date().toISOString(),
-      })
-      .eq("id", volunteer.id);
+      .update({ pin_hash: hash, pin_set_at: new Date().toISOString() })
+      .eq("id", volunteer.id)
+      .is("pin_hash", null)
+      .select("id");
 
-    if (uErr) {
-      return res.status(500).json({ error: uErr.message });
+    if (uErr) return res.status(500).json({ error: uErr.message });
+    if (!updatedRows || updatedRows.length === 0) {
+      return res.status(409).json({ error: "PIN already set" });
     }
 
     return res.status(200).json({ ok: true });
