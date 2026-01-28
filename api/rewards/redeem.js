@@ -1,6 +1,5 @@
 // api/rewards/redeem.js
 import { getAdminClient } from "../_lib/supabaseAdmin.js";
-import { getBearerToken, verifyJwtHS256 } from "../_lib/jwt.js";
 
 function parseJsonBody(req) {
   if (!req || !req.body) return {};
@@ -16,21 +15,18 @@ function parseJsonBody(req) {
 
 export default async function handler(req, res) {
   try {
-    const token = getBearerToken(req);
-    const payload = verifyJwtHS256(token);
-
     const supabase = getAdminClient();
-    const { reward_id } = parseJsonBody(req);
+    const { reward_id, volunteer_id } = parseJsonBody(req);
 
-    if (!reward_id) {
-      return res.status(400).json({ error: "reward_id required" });
+    if (!reward_id || !volunteer_id) {
+      return res.status(400).json({ error: "reward_id and volunteer_id required" });
     }
 
     // 1) ดึงข้อมูลอาสา
     const { data: volunteer, error: vErr } = await supabase
       .from("volunteers")
       .select("id, points")
-      .eq("id", payload.volunteer_id)
+      .eq("id", volunteer_id)
       .single();
 
     if (vErr || !volunteer) {
@@ -48,7 +44,7 @@ export default async function handler(req, res) {
       return res.status(404).json({ error: "Reward not found" });
     }
 
-    // 3) คำนวณแต้มที่ถูกล็อก (pending)
+    // 3) คำนวณแต้มที่ถูกล็อกจาก pending
     const { data: pendingList, error: pErr } = await supabase
       .from("redemption_requests")
       .select("reward_id")
@@ -72,7 +68,7 @@ export default async function handler(req, res) {
 
     const availablePoints = volunteer.points - pendingPoints;
 
-    // 4) เช็กแต้มจริง
+    // 4) เช็กแต้มที่ใช้ได้จริง
     if (availablePoints < reward.cost) {
       return res.status(400).json({
         error: "Not enough available points",
@@ -80,7 +76,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // 5) สร้างคำขอแลกของ (pending)
+    // 5) สร้างคำขอแลกของ
     const { error: insErr } = await supabase
       .from("redemption_requests")
       .insert({
@@ -93,11 +89,8 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: insErr.message });
     }
 
-    return res.json({
-      success: true,
-      message: "Redemption request created",
-    });
+    return res.json({ success: true });
   } catch (err) {
-    return res.status(401).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
   }
 }
