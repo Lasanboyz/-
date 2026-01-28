@@ -62,10 +62,6 @@ export default async function handler(req, res) {
     const stock = Number(reward.stock || 0);
     const pointsUsed = cost * qty;
 
-    if (pointsUsed <= 0) {
-      return res.status(400).json({ error: "Invalid reward cost" });
-    }
-
     if (stock < qty) {
       return res.status(400).json({ error: "Stock not enough" });
     }
@@ -81,35 +77,8 @@ export default async function handler(req, res) {
     if (!vol) return res.status(404).json({ error: "Volunteer not found" });
 
     const currentPoints = Number(vol.points || 0);
-
-    // =====================================================
-    // ✅ NEW: LOCK POINTS WHEN PENDING
-    // pendingPoints = sum(points_used) where status = PENDING
-    // availablePoints = currentPoints - pendingPoints
-    // =====================================================
-    const { data: pendingRows, error: pendErr } = await supabase
-      .from("redemption_requests")
-      .select("points_used")
-      .eq("volunteer_id", volunteerId)
-      .eq("status", "PENDING");
-
-    if (pendErr) throw pendErr;
-
-    const pendingPoints = (pendingRows || []).reduce((sum, r) => {
-      const n = Number(r?.points_used || 0);
-      return sum + (Number.isFinite(n) ? n : 0);
-    }, 0);
-
-    const availablePoints = currentPoints - pendingPoints;
-
-    if (availablePoints < pointsUsed) {
-      return res.status(400).json({
-        error: "Not enough available points",
-        current_points: currentPoints,
-        pending_points: pendingPoints,
-        available_points: availablePoints,
-        required_points: pointsUsed,
-      });
+    if (currentPoints < pointsUsed) {
+      return res.status(400).json({ error: "Points not enough" });
     }
 
     // ---- Prevent duplicate pending (same reward) ----
@@ -125,7 +94,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Already have pending request" });
     }
 
-    // ---- Insert request ----
+    // ---- Insert request (PENDING) ----
     const payloadInsert = {
       volunteer_id: volunteerId,
       reward_id,
@@ -135,7 +104,6 @@ export default async function handler(req, res) {
       status: "PENDING",
     };
 
-    // เก็บเบอร์ (ถ้ามี column นี้อยู่จริง)
     if (phone_number) payloadInsert.phone_number = phone_number;
 
     const { data: reqRow, error: insErr } = await supabase
@@ -146,12 +114,42 @@ export default async function handler(req, res) {
 
     if (insErr) throw insErr;
 
+    // =========================================================
+    // ✅ LOCK POINTS: หักแต้มทันทีตอน PENDING (กันโอนได้)
+    // =========================================================
+    const newPoints = currentPoints - pointsUsed;
+
+    const { error: updErr } = await supabase
+      .from("volunteers")
+      .update({ points: newPoints })
+      .eq("id", volunteerId);
+
+    if (updErr) {
+      // best-effort rollback: ลบ request ที่เพิ่งสร้าง (กันค้างแบบแต้มไม่ถูกหัก)
+      try {
+        await supabase.from("redemption_requests").delete().eq("id", reqRow?.id);
+      } catch {}
+      throw updErr;
+    }
+
+    // log transaction (เป็นการ "ล็อกแต้ม")
+    const { error: txErr } = await supabase.from("point_transactions").insert({
+      from_volunteer_id: volunteerId,
+      to_volunteer_id: null,
+      amount: pointsUsed,
+      type: "redeem_lock",
+      note: `redeem pending lock: ${reward.title} x${qty}`,
+    });
+
+    if (txErr) {
+      // ถ้า log fail ไม่ให้พังระบบหลัก (แต้มถูกหักแล้ว + request ถูกสร้างแล้ว)
+      console.error("[redeem] point_transactions insert error:", txErr);
+    }
+
     return res.status(200).json({
       ok: true,
       request: reqRow,
-      current_points: currentPoints,
-      pending_points: pendingPoints,
-      available_points: availablePoints, // available ก่อนสร้างรายการนี้
+      new_points: newPoints, // ✅ ส่งแต้มใหม่กลับ
     });
   } catch (e) {
     console.error("[redeem] error:", e);
