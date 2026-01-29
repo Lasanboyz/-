@@ -20,10 +20,10 @@ function normalizeCode(v: any) {
   return String(v ?? "").trim().replace(/\s+/g, "").toUpperCase();
 }
 
+// ✅ ใช้ role อย่างเดียว (ไม่ใช้ is_staff แล้ว)
 function isStaffLike(row: any) {
   const role = String(row?.role ?? "").toUpperCase();
-  const isStaffBool = row?.is_staff === true;
-  return isStaffBool || role === "ADMIN" || role === "STAFF";
+  return role === "ADMIN" || role === "STAFF";
 }
 
 export const Leaderboard: React.FC = () => {
@@ -48,9 +48,7 @@ export const Leaderboard: React.FC = () => {
   const isAllYears = selectedYear === 0;
   const isNoScoreYear = !isAllYears && selectedYear >= 2557 && selectedYear <= 2568;
 
-  // ปีงดคะแนน หรือ รวมทุกปี => ไฮไลต์จำนวนครั้ง
   const highlightActivityCount = isAllYears || isNoScoreYear;
-
   const mode: LeaderboardMode = viewType === "STAFF" ? "ADMIN" : "VOLUNTEERS";
 
   useEffect(() => {
@@ -68,11 +66,11 @@ export const Leaderboard: React.FC = () => {
         }
 
         // =========================
-        // 1) ✅ ดึงคะแนนจริงจาก volunteers.points
+        // 1) ✅ ดึงคะแนนจริงจาก volunteers.points (ไม่ select is_staff)
         // =========================
         const { data: vData, error: vError } = await supabaseClient
           .from("volunteers")
-          .select("id, volunteer_code, name, branch, role, is_staff, points");
+          .select("id, volunteer_code, name, branch, role, points");
 
         if (vError) throw vError;
         if (cancelled) return;
@@ -83,7 +81,6 @@ export const Leaderboard: React.FC = () => {
           name: r.name ?? "",
           branch: r.branch ?? "",
           role: r.role ?? "",
-          is_staff: typeof r.is_staff === "boolean" ? r.is_staff : undefined,
           points: Number(r.points ?? 0),
         }));
 
@@ -94,8 +91,6 @@ export const Leaderboard: React.FC = () => {
 
         // =========================
         // 2) ✅ นับ activity_count จาก activity_history
-        //    - filter ปีตาม selectedYear (ถ้า 0 = all)
-        //    - filter status ตาม mode
         // =========================
         let actQuery = supabaseClient
           .from("activity_history")
@@ -104,7 +99,6 @@ export const Leaderboard: React.FC = () => {
 
         if (!isAllYears) actQuery = actQuery.eq("thai_year", selectedYear);
 
-        // โหมด STAFF ดูเฉพาะ activity ที่ status=ADMIN / โหมด VOLUNTEER ดู status=VOLUNTEER
         actQuery =
           mode === "ADMIN"
             ? actQuery.eq("status", "ADMIN")
@@ -126,7 +120,6 @@ export const Leaderboard: React.FC = () => {
         // =========================
         const mapped: LeaderboardItem[] = vols.map((r) => {
           const empId = r.volunteer_code;
-
           const pointsRaw = Number(r.points ?? 0);
           const activityCount = Number(activityCountByCode.get(empId) ?? 0);
 
@@ -135,7 +128,6 @@ export const Leaderboard: React.FC = () => {
             empId,
             name: r.name ?? "",
             type: r.branch ?? "",
-            ...(typeof r.is_staff === "boolean" ? { isStaff: r.is_staff } : {}),
           } as any;
 
           const pointsAfterRule = isNoScoreYear ? 0 : pointsRaw;
@@ -144,7 +136,6 @@ export const Leaderboard: React.FC = () => {
           return { volunteer, points: pointsAfterRule, activityCount, rank };
         });
 
-        // sort (เหมือนเดิม)
         mapped.sort((a, b) =>
           highlightActivityCount ? b.activityCount - a.activityCount : b.points - a.points
         );
@@ -291,13 +282,7 @@ export const Leaderboard: React.FC = () => {
                   : "";
 
               const topRing =
-                isTop1
-                  ? "ring-1 ring-yellow-200"
-                  : isTop2
-                  ? "ring-1 ring-gray-200"
-                  : isTop3
-                  ? "ring-1 ring-orange-200"
-                  : "";
+                isTop1 ? "ring-1 ring-yellow-200" : isTop2 ? "ring-1 ring-gray-200" : isTop3 ? "ring-1 ring-orange-200" : "";
 
               const topShadow =
                 isTop1
