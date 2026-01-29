@@ -2,12 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Trophy, Calendar, Flag, Users, Briefcase, Crown } from "lucide-react";
 
-import {
-  fetchLeaderboardSummary,
-  getCurrentThaiYear,
-  getRank,
-  type LeaderboardMode,
-} from "../services/dataService";
+import { supabase as supabaseClient } from "../services/supabaseClient";
+import { getCurrentThaiYear, getRank, type LeaderboardMode } from "../services/dataService";
 
 import type { Volunteer, RankConfig } from "../types";
 
@@ -20,6 +16,16 @@ interface LeaderboardItem {
 
 type ViewType = "VOLUNTEER" | "STAFF";
 
+function normalizeCode(v: any) {
+  return String(v ?? "").trim().replace(/\s+/g, "").toUpperCase();
+}
+
+function isStaffLike(row: any) {
+  const role = String(row?.role ?? "").toUpperCase();
+  const isStaffBool = row?.is_staff === true;
+  return isStaffBool || role === "ADMIN" || role === "STAFF";
+}
+
 export const Leaderboard: React.FC = () => {
   const navigate = useNavigate();
 
@@ -30,6 +36,7 @@ export const Leaderboard: React.FC = () => {
   const currentThaiYear = getCurrentThaiYear();
   const maxYear = Math.max(currentThaiYear, 2570);
   const minYear = 2557;
+
   const yearOptions = useMemo(
     () => Array.from({ length: maxYear - minYear + 1 }, (_, i) => maxYear - i),
     [maxYear]
@@ -54,31 +61,90 @@ export const Leaderboard: React.FC = () => {
         setLoading(true);
         setErrorMsg(null);
 
-        const rows: any[] = await fetchLeaderboardSummary(mode, selectedYear);
+        if (!supabaseClient) {
+          setItems([]);
+          setErrorMsg("Supabase client not ready");
+          return;
+        }
+
+        // =========================
+        // 1) ✅ ดึงคะแนนจริงจาก volunteers.points
+        // =========================
+        const { data: vData, error: vError } = await supabaseClient
+          .from("volunteers")
+          .select("id, volunteer_code, name, branch, role, is_staff, points");
+
+        if (vError) throw vError;
         if (cancelled) return;
 
-        console.log("[Leaderboard] mode/year/rows:", mode, selectedYear, rows?.length ?? 0);
+        const allVols = (vData ?? []).map((r: any) => ({
+          id: r.id ?? normalizeCode(r.volunteer_code),
+          volunteer_code: normalizeCode(r.volunteer_code),
+          name: r.name ?? "",
+          branch: r.branch ?? "",
+          role: r.role ?? "",
+          is_staff: typeof r.is_staff === "boolean" ? r.is_staff : undefined,
+          points: Number(r.points ?? 0),
+        }));
 
-        const mapped: LeaderboardItem[] = (rows ?? []).map((r: any) => {
-          const empId = String(r.volunteer_code ?? "").trim();
+        const vols =
+          mode === "ADMIN"
+            ? allVols.filter(isStaffLike)
+            : allVols.filter((r) => !isStaffLike(r));
 
-          const points = Number(r.points ?? 0);
-          const activityCount = Number(r.activity_count ?? 0);
+        // =========================
+        // 2) ✅ นับ activity_count จาก activity_history
+        //    - filter ปีตาม selectedYear (ถ้า 0 = all)
+        //    - filter status ตาม mode
+        // =========================
+        let actQuery = supabaseClient
+          .from("activity_history")
+          .select("volunteer_code, thai_year, status")
+          .eq("is_void", false);
+
+        if (!isAllYears) actQuery = actQuery.eq("thai_year", selectedYear);
+
+        // โหมด STAFF ดูเฉพาะ activity ที่ status=ADMIN / โหมด VOLUNTEER ดู status=VOLUNTEER
+        actQuery =
+          mode === "ADMIN"
+            ? actQuery.eq("status", "ADMIN")
+            : actQuery.eq("status", "VOLUNTEER");
+
+        const { data: actData, error: actError } = await actQuery;
+        if (actError) throw actError;
+        if (cancelled) return;
+
+        const activityCountByCode = new Map<string, number>();
+        for (const a of actData ?? []) {
+          const code = normalizeCode((a as any).volunteer_code);
+          if (!code) continue;
+          activityCountByCode.set(code, (activityCountByCode.get(code) ?? 0) + 1);
+        }
+
+        // =========================
+        // 3) Merge -> LeaderboardItem
+        // =========================
+        const mapped: LeaderboardItem[] = vols.map((r) => {
+          const empId = r.volunteer_code;
+
+          const pointsRaw = Number(r.points ?? 0);
+          const activityCount = Number(activityCountByCode.get(empId) ?? 0);
 
           const volunteer: Volunteer = {
             id: empId || crypto.randomUUID(),
             empId,
             name: r.name ?? "",
-            type: r.branch ?? "", // ใช้เป็นสาขา
+            type: r.branch ?? "",
             ...(typeof r.is_staff === "boolean" ? { isStaff: r.is_staff } : {}),
           } as any;
 
-          const pointsAfterRule = isNoScoreYear ? 0 : points;
+          const pointsAfterRule = isNoScoreYear ? 0 : pointsRaw;
           const rank = getRank(pointsAfterRule, activityCount);
 
           return { volunteer, points: pointsAfterRule, activityCount, rank };
         });
 
+        // sort (เหมือนเดิม)
         mapped.sort((a, b) =>
           highlightActivityCount ? b.activityCount - a.activityCount : b.points - a.points
         );
@@ -98,7 +164,7 @@ export const Leaderboard: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [mode, selectedYear, highlightActivityCount, isNoScoreYear]);
+  }, [mode, selectedYear, highlightActivityCount, isNoScoreYear, isAllYears]);
 
   const visibleItems = useMemo(() => {
     return items.filter((i) => (highlightActivityCount ? i.activityCount > 0 : i.points > 0));
@@ -213,8 +279,7 @@ export const Leaderboard: React.FC = () => {
 
               const name = (item.volunteer.name ?? "").trim();
               const branch = (item.volunteer.type ?? "").trim();
-              const nameWithBranch =
-                name && branch ? `${name} • ${branch}` : name || branch || "";
+              const nameWithBranch = name && branch ? `${name} • ${branch}` : name || branch || "";
 
               const topBg =
                 isTop1
@@ -243,8 +308,7 @@ export const Leaderboard: React.FC = () => {
                   ? "shadow-[0_10px_25px_rgba(249,115,22,0.16)]"
                   : "";
 
-              const crownColor =
-                isTop1 ? "text-amber-500" : isTop2 ? "text-slate-400" : "text-orange-500";
+              const crownColor = isTop1 ? "text-amber-500" : isTop2 ? "text-slate-400" : "text-orange-500";
 
               const badgeBg =
                 isTop1
@@ -262,7 +326,6 @@ export const Leaderboard: React.FC = () => {
                   ].join(" ")}
                   style={{ animationDelay: `${index * 0.05}s` }}
                 >
-                  {/* Glow layer for Top 3 */}
                   {isTop && (
                     <div
                       className={[
@@ -276,7 +339,6 @@ export const Leaderboard: React.FC = () => {
                     />
                   )}
 
-                  {/* Rank badge (ชัดเจนว่า 1/2/3) */}
                   <div className="relative flex-shrink-0">
                     {isTop ? (
                       <div className="w-12 h-12 rounded-2xl flex items-center justify-center font-extrabold text-xl shadow-sm bg-white/70">
@@ -294,7 +356,6 @@ export const Leaderboard: React.FC = () => {
                     )}
                   </div>
 
-                  {/* ✅ รหัส + ชื่อ • สาขา (มือถืออ่านง่าย) */}
                   <div className="flex-grow min-w-0 relative">
                     <div className="min-w-0">
                       <div className="flex items-baseline gap-2 min-w-0">
@@ -304,18 +365,14 @@ export const Leaderboard: React.FC = () => {
                       </div>
 
                       {nameWithBranch ? (
-                        <div className="text-sm font-semibold text-gray-700 truncate -mt-0.5">
-                          {nameWithBranch}
-                        </div>
+                        <div className="text-sm font-semibold text-gray-700 truncate -mt-0.5">{nameWithBranch}</div>
                       ) : (
                         <div className="text-xs text-gray-400 -mt-0.5">—</div>
                       )}
                     </div>
 
                     <div className="flex items-center gap-2 mt-2">
-                      <span
-                        className={`text-[10px] px-2 py-0.5 rounded-full ${item.rank.color} flex items-center gap-1`}
-                      >
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full ${item.rank.color} flex items-center gap-1`}>
                         {item.rank.icon} {item.rank.name}
                       </span>
 
@@ -327,14 +384,11 @@ export const Leaderboard: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* คะแนน / ครั้ง */}
                   <div className="text-right flex-shrink-0 flex flex-col items-end relative">
                     {highlightActivityCount ? (
                       <>
                         <div className="flex items-baseline gap-1 leading-none">
-                          <span className="text-3xl font-extrabold text-pink-600">
-                            {item.activityCount}
-                          </span>
+                          <span className="text-3xl font-extrabold text-pink-600">{item.activityCount}</span>
                           <span className="text-sm font-semibold text-gray-500">ครั้ง</span>
                         </div>
 
@@ -349,9 +403,7 @@ export const Leaderboard: React.FC = () => {
                     ) : (
                       <>
                         <div className="flex items-baseline gap-1 leading-none">
-                          <span className="text-3xl font-extrabold text-primary">
-                            {item.points}
-                          </span>
+                          <span className="text-3xl font-extrabold text-primary">{item.points}</span>
                           <span className="text-sm font-semibold text-gray-500">คะแนน</span>
                         </div>
                         <div className="mt-1 text-xs text-pink-600 bg-pink-50 px-2 py-0.5 rounded-full flex items-center gap-1">
