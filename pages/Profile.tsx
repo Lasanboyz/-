@@ -111,7 +111,10 @@ export const Profile: React.FC = () => {
 
   // Logged-in code
   const authedCode = useMemo(() => getAuthedVolunteerCode(), []);
-  const isOwner = useMemo(() => !!authedCode && authedCode === volunteerCode, [authedCode, volunteerCode]);
+  const isOwner = useMemo(
+    () => !!authedCode && authedCode === volunteerCode,
+    [authedCode, volunteerCode]
+  );
 
   const isNoScoreYear = selectedYear >= 2557 && selectedYear <= 2568;
 
@@ -151,19 +154,6 @@ export const Profile: React.FC = () => {
   const toThaiYearFromDate = (dateLike: string) => {
     const d = new Date(dateLike);
     return d.getFullYear() + 543;
-  };
-
-  const sumPointsWithRule = (txs: Transaction[], year?: number) => {
-    return txs
-      .filter((t) => (year ? t.thaiYear === year : true))
-      .reduce((sum, t) => {
-        if (t.thaiYear >= 2557 && t.thaiYear <= 2568) return sum;
-
-        // กันบวกซ้ำจากกิจกรรม (Activity ไม่นับรวมแต้มปี เพราะ DB points เป็นตัวจริง)
-        if (String(t.type).toUpperCase() === "ACTIVITY") return sum;
-
-        return sum + Number(t.amount ?? 0);
-      }, 0);
   };
 
   const countActivities = (txs: Transaction[], year: number) => {
@@ -262,7 +252,7 @@ export const Profile: React.FC = () => {
           return;
         }
 
-        // 1) activity_history -> +20/ครั้ง
+        // 1) activity_history -> +20/ครั้ง (ใช้แค่ทำประวัติ/นับครั้ง)
         const { data: actData } = await supabaseClient
           .from("activity_history")
           .select("activity_date, thai_year, status")
@@ -290,7 +280,7 @@ export const Profile: React.FC = () => {
           };
         });
 
-        // 2) point_transactions_view -> TRANSFER/DEDUCT/ADJUSTMENT/REDEEM
+        // 2) point_transactions_view -> TRANSFER/DEDUCT/ADJUSTMENT/REDEEM (ใช้โชว์ประวัติ)
         const { data: txData, error: txError } = await supabaseClient
           .from("point_transactions_view")
           .select("*")
@@ -299,9 +289,7 @@ export const Profile: React.FC = () => {
 
         if (txError) console.error("TX load error:", txError);
 
-        const pointTx: Transaction[] = (txData ?? []).map((t: any) =>
-          mapTxViewToTransaction(t, vRow.id)
-        );
+        const pointTx: Transaction[] = (txData ?? []).map((t: any) => mapTxViewToTransaction(t, vRow.id));
 
         const allTx = [...pointTx, ...activityTx].sort(
           (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
@@ -309,18 +297,19 @@ export const Profile: React.FC = () => {
 
         setTransactions(allTx);
 
-        // ✅ totalPoints: ถ้าเป็น owner -> ดึงแต้มจริงจาก DB
-        // ถ้าไม่ใช่ owner -> ยังแสดงแต้มได้ (ตามที่เควินบอกว่า "อาจดูได้") แต่ผมแนะนำให้โชว์ได้เหมือนเดิม
+        // ✅ แต้มจริง (source of truth) จาก volunteers.points
         const latest = await fetchVolunteerPointsByCode(volunteerCode);
         const totalFromDb = Number(latest?.points ?? 0);
         setTotalPoints(totalFromDb);
 
-        const currentYear = getCurrentThaiYear();
-        const annual = sumPointsWithRule(allTx, currentYear);
-        setAnnualPoints(annual);
+        // ✅ FIX: แต้มสะสมปีนี้ = แต้มรวมทั้งหมด (DB points) เพื่อให้เลขตรงกันเสมอ
+        setAnnualPoints(totalFromDb);
 
+        const currentYear = getCurrentThaiYear();
         const activityCountThisYear = countActivities(allTx, currentYear);
-        setRank(computeRank(annual, activityCountThisYear));
+
+        // rank ใช้แต้มจริงจาก DB
+        setRank(computeRank(totalFromDb, activityCountThisYear));
       } catch (err: any) {
         if (cancelled) return;
         console.error("Profile load error:", err);
@@ -341,22 +330,14 @@ export const Profile: React.FC = () => {
     };
   }, [volunteerCode, reloadTick, authedCode]);
 
+  // ✅ FIX: อย่าคำนวณ annualPoints จาก transactions อีก (มันทำให้ reject/refund เด้ง)
   useEffect(() => {
-    if (!transactions || transactions.length === 0) {
-      setAnnualPoints(0);
-      setRank(computeRank(0, 0));
-      return;
-    }
-
     const currentYear = getCurrentThaiYear();
-    const effectiveYear = selectedYear === 0 ? currentYear : selectedYear;
+    const activityCount = countActivities(transactions ?? [], currentYear);
 
-    const pts = sumPointsWithRule(transactions, effectiveYear);
-    const activityCount = countActivities(transactions, effectiveYear);
-
-    setAnnualPoints(pts);
-    setRank(computeRank(pts, activityCount));
-  }, [selectedYear, transactions]);
+    setAnnualPoints(totalPoints);
+    setRank(computeRank(totalPoints, activityCount));
+  }, [selectedYear, transactions, totalPoints]);
 
   const handleTransferSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -488,7 +469,9 @@ export const Profile: React.FC = () => {
 
             <div className="text-right">
               <p className="text-sm text-gray-500 mb-1">แต้มสะสมปีนี้</p>
-              <span className={`text-3xl font-bold ${isNoScoreYear ? "text-gray-400" : "text-primary"}`}>
+              <span
+                className={`text-3xl font-bold ${isNoScoreYear ? "text-gray-400" : "text-primary"}`}
+              >
                 {isNoScoreYear ? "ไม่ระบุ" : annualPoints}
               </span>
             </div>
