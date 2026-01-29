@@ -20,14 +20,35 @@ function normalizeCode(v: any) {
   return String(v ?? "").trim().replace(/\s+/g, "").toUpperCase();
 }
 
-function normalizeStatus(v: any) {
-  return String(v ?? "").trim().toUpperCase();
-}
-
 // ✅ ใช้ role อย่างเดียว (ไม่ใช้ is_staff แล้ว)
 function isStaffLike(row: any) {
-  const role = String(row?.role ?? "").trim().toUpperCase();
+  const role = String(row?.role ?? "").toUpperCase();
   return role === "ADMIN" || role === "STAFF";
+}
+
+/**
+ * ✅ PostgREST มัก limit ~1000 rows ต่อ request
+ * ทำ helper ดึงแบบ paginate จนครบ
+ */
+async function fetchAll<T>(
+  makeQuery: (from: number, to: number) => any,
+  pageSize = 1000,
+  maxPages = 50 // กันลูปไม่จบ (50k rows พอแล้วสำหรับเคสนี้)
+): Promise<T[]> {
+  const out: T[] = [];
+  for (let page = 0; page < maxPages; page++) {
+    const from = page * pageSize;
+    const to = from + pageSize - 1;
+
+    const { data, error } = await makeQuery(from, to);
+    if (error) throw error;
+
+    const rows = (data ?? []) as T[];
+    out.push(...rows);
+
+    if (rows.length < pageSize) break; // หมดแล้ว
+  }
+  return out;
 }
 
 export const Leaderboard: React.FC = () => {
@@ -70,16 +91,20 @@ export const Leaderboard: React.FC = () => {
         }
 
         // =========================
-        // 1) ✅ volunteers
+        // 1) ✅ ดึง volunteers ให้ครบทุกแถว (paginate)
         // =========================
-        const { data: vData, error: vError } = await supabaseClient
-          .from("volunteers")
-          .select("id, volunteer_code, name, branch, role, points");
+        const vRows = await fetchAll<any>(
+          (from, to) =>
+            supabaseClient
+              .from("volunteers")
+              .select("id, volunteer_code, name, branch, role, points")
+              .range(from, to),
+          1000
+        );
 
-        if (vError) throw vError;
         if (cancelled) return;
 
-        const allVols = (vData ?? []).map((r: any) => ({
+        const allVols = (vRows ?? []).map((r: any) => ({
           id: r.id ?? normalizeCode(r.volunteer_code),
           volunteer_code: normalizeCode(r.volunteer_code),
           name: r.name ?? "",
@@ -94,34 +119,39 @@ export const Leaderboard: React.FC = () => {
             : allVols.filter((r) => !isStaffLike(r));
 
         // =========================
-        // 2) ✅ activity_history
-        //    (สำคัญ: include is_void ใน select ให้ตรงกับ filter)
+        // 2) ✅ ดึง activity_history ให้ครบทุกแถวตามเงื่อนไข (paginate)
         // =========================
-        let actQuery = supabaseClient
-          .from("activity_history")
-          .select("volunteer_code, thai_year, status, is_void")
-          .eq("is_void", false);
+        const actRows = await fetchAll<any>(
+          (from, to) => {
+            let q = supabaseClient
+              .from("activity_history")
+              .select("volunteer_code, thai_year, status")
+              .eq("is_void", false)
+              .range(from, to);
 
-        if (!isAllYears) actQuery = actQuery.eq("thai_year", selectedYear);
+            if (!isAllYears) q = q.eq("thai_year", selectedYear);
 
-        actQuery =
-          mode === "ADMIN"
-            ? actQuery.eq("status", "ADMIN")
-            : actQuery.eq("status", "VOLUNTEER");
+            q =
+              mode === "ADMIN"
+                ? q.eq("status", "ADMIN")
+                : q.eq("status", "VOLUNTEER");
 
-        const { data: actData, error: actError } = await actQuery;
-        if (actError) throw actError;
+            return q;
+          },
+          1000
+        );
+
         if (cancelled) return;
 
         const activityCountByCode = new Map<string, number>();
-        for (const a of actData ?? []) {
+        for (const a of actRows ?? []) {
           const code = normalizeCode((a as any).volunteer_code);
           if (!code) continue;
           activityCountByCode.set(code, (activityCountByCode.get(code) ?? 0) + 1);
         }
 
         // =========================
-        // 3) Merge
+        // 3) Merge -> LeaderboardItem
         // =========================
         const mapped: LeaderboardItem[] = vols.map((r) => {
           const empId = r.volunteer_code;
