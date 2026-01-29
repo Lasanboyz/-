@@ -20,9 +20,13 @@ function normalizeCode(v: any) {
   return String(v ?? "").trim().replace(/\s+/g, "").toUpperCase();
 }
 
+function normalizeStatus(v: any) {
+  return String(v ?? "").trim().toUpperCase();
+}
+
 // ✅ ใช้ role อย่างเดียว (ไม่ใช้ is_staff แล้ว)
 function isStaffLike(row: any) {
-  const role = String(row?.role ?? "").toUpperCase();
+  const role = String(row?.role ?? "").trim().toUpperCase();
   return role === "ADMIN" || role === "STAFF";
 }
 
@@ -66,7 +70,7 @@ export const Leaderboard: React.FC = () => {
         }
 
         // =========================
-        // 1) ✅ ดึงคะแนนจริงจาก volunteers.points (ไม่ select is_staff)
+        // 1) ✅ volunteers
         // =========================
         const { data: vData, error: vError } = await supabaseClient
           .from("volunteers")
@@ -90,11 +94,12 @@ export const Leaderboard: React.FC = () => {
             : allVols.filter((r) => !isStaffLike(r));
 
         // =========================
-        // 2) ✅ นับ activity_count จาก activity_history
+        // 2) ✅ activity_history
+        //    (สำคัญ: include is_void ใน select ให้ตรงกับ filter)
         // =========================
         let actQuery = supabaseClient
           .from("activity_history")
-          .select("volunteer_code, thai_year, status")
+          .select("volunteer_code, thai_year, status, is_void")
           .eq("is_void", false);
 
         if (!isAllYears) actQuery = actQuery.eq("thai_year", selectedYear);
@@ -116,7 +121,7 @@ export const Leaderboard: React.FC = () => {
         }
 
         // =========================
-        // 3) Merge -> LeaderboardItem
+        // 3) Merge
         // =========================
         const mapped: LeaderboardItem[] = vols.map((r) => {
           const empId = r.volunteer_code;
