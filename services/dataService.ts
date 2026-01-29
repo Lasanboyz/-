@@ -455,7 +455,7 @@ export async function adminGivePoints(params: { toVolunteerCode: string; amount:
 
 export async function adminDeductPoints(params: { volunteerCode: string; amount: number; note?: string }) {
   const code = String(params.volunteerCode ?? "").trim().toUpperCase();
-  const amount = Number(params.amount ?? 0);
+  const amount = Math.floor(Number(params.amount ?? 0));
   const note = String(params.note ?? "").trim();
 
   if (!code) throw new Error("กรุณากรอกรหัสพนักงาน");
@@ -464,17 +464,13 @@ export async function adminDeductPoints(params: { volunteerCode: string; amount:
   const v = await getVolunteerByCodeForPoints(code);
   if (!v) throw new Error(`ไม่พบพนักงาน: ${code}`);
 
+  // ✅ (optional) เช็กแต้มก่อนหัก เพื่อ UX ดี / error ชัด
+  // แต่ตัวจริงจะถูกกันซ้ำด้วย trigger check_non_negative_on_deduct() อยู่แล้ว
   const current = Number(v.points ?? 0);
   if (current < amount) throw new Error(`แต้มไม่พอ (คงเหลือ ${current})`);
 
-  const { error: updErr } = await supabase.from("volunteers").update({ points: current - amount }).eq("id", v.id);
-
-  if (updErr) {
-    console.error("[Supabase] adminDeductPoints update error:", updErr);
-    throw new Error(updErr.message);
-  }
-
-  const { error: logErr } = await supabase.from("point_transactions").insert({
+  // ✅ ทำแค่ "log" แล้วให้ trigger trg_update_points ไปหักแต้มเอง
+  const { error } = await supabase.from("point_transactions").insert({
     from_volunteer_id: null,
     to_volunteer_id: v.id,
     amount,
@@ -482,7 +478,17 @@ export async function adminDeductPoints(params: { volunteerCode: string; amount:
     note: note || `admin deduct -${amount} from ${code}`,
   });
 
-  if (logErr) console.error("[Supabase] adminDeductPoints log error:", logErr);
+  if (error) {
+    console.error("[Supabase] adminDeductPoints error:", error);
+
+    const msg = String(error.message || "").toLowerCase();
+    // กันข้อความ error ที่อ่านง่ายขึ้น (เผื่อ trigger โยน error มา)
+    if (msg.includes("insufficient") || msg.includes("non-negative") || msg.includes("negative")) {
+      throw new Error("แต้มไม่พอสำหรับการหัก");
+    }
+
+    throw new Error(error.message);
+  }
 
   return true;
 }
