@@ -16,24 +16,62 @@ interface LeaderboardItem {
 
 type ViewType = "VOLUNTEER" | "STAFF";
 
+type VolunteerRow = {
+  id: any;
+  volunteer_code: any;
+  name: any;
+  branch: any;
+  role: any;
+  points: any;
+};
+
+type ActivityRow = {
+  volunteer_code: any;
+  thai_year: any;
+  status: any; // "ADMIN" | "VOLUNTEER" | null
+};
+
+// ---- Code normalize (สำคัญมาก) ----
+// 1) trim/remove spaces
+// 2) uppercase
+// 3) รองรับกรณีเป็น number -> pad 8 หลัก (กัน leading zero หาย)
 function normalizeCode(v: any) {
-  return String(v ?? "").trim().replace(/\s+/g, "").toUpperCase();
+  if (v === null || v === undefined) return "";
+
+  // If it is a number, it already lost leading zeros; pad to 8 as a practical default.
+  if (typeof v === "number" && Number.isFinite(v)) {
+    const s = String(Math.trunc(v));
+    return s.padStart(8, "0").toUpperCase();
+  }
+
+  const raw = String(v).trim().replace(/\s+/g, "").toUpperCase();
+
+  // If it's all digits and short, try padStart to 8 (common employee/volunteer code length)
+  if (/^\d+$/.test(raw) && raw.length > 0 && raw.length < 8) {
+    return raw.padStart(8, "0");
+  }
+
+  return raw;
 }
 
-// ✅ ใช้ role อย่างเดียว (ไม่ใช้ is_staff แล้ว)
-function isStaffLike(row: any) {
-  const role = String(row?.role ?? "").toUpperCase();
-  return role === "ADMIN" || role === "STAFF";
+function normalizeRole(role: any): "ADMIN" | "VOLUNTEER" {
+  const r = String(role ?? "").toUpperCase().trim();
+  return r === "ADMIN" || r === "STAFF" ? "ADMIN" : "VOLUNTEER";
+}
+
+function isStaffLikeByRole(role: any) {
+  const r = String(role ?? "").toUpperCase().trim();
+  return r === "ADMIN" || r === "STAFF";
 }
 
 /**
- * ✅ PostgREST มัก limit ~1000 rows ต่อ request
+ * ✅ PostgREST limit ~1000 rows ต่อ request
  * ทำ helper ดึงแบบ paginate จนครบ
  */
 async function fetchAll<T>(
   makeQuery: (from: number, to: number) => any,
   pageSize = 1000,
-  maxPages = 50 // กันลูปไม่จบ (50k rows พอแล้วสำหรับเคสนี้)
+  maxPages = 80 // กันลูปไม่จบ (80k rows)
 ): Promise<T[]> {
   const out: T[] = [];
   for (let page = 0; page < maxPages; page++) {
@@ -46,9 +84,39 @@ async function fetchAll<T>(
     const rows = (data ?? []) as T[];
     out.push(...rows);
 
-    if (rows.length < pageSize) break; // หมดแล้ว
+    if (rows.length < pageSize) break;
   }
   return out;
+}
+
+function pickBetterVolunteer(a: VolunteerRow, b: VolunteerRow): VolunteerRow {
+  // เลือกแถวที่ "ดีที่สุด" เมื่อ volunteer_code ซ้ำ
+  const aName = String(a.name ?? "").trim();
+  const bName = String(b.name ?? "").trim();
+  const aBranch = String(a.branch ?? "").trim();
+  const bBranch = String(b.branch ?? "").trim();
+  const aPts = Number(a.points ?? 0);
+  const bPts = Number(b.points ?? 0);
+
+  // Prefer non-empty name
+  if (!!aName !== !!bName) return aName ? a : b;
+  // Prefer non-empty branch
+  if (!!aBranch !== !!bBranch) return aBranch ? a : b;
+  // Prefer higher points (just in case)
+  if (aPts !== bPts) return aPts > bPts ? a : b;
+
+  // Prefer ADMIN/STAFF row if one is staff-like (rare)
+  const aStaff = isStaffLikeByRole(a.role);
+  const bStaff = isStaffLikeByRole(b.role);
+  if (aStaff !== bStaff) return aStaff ? a : b;
+
+  return a; // stable
+}
+
+function effectiveStatus(rowStatus: any, roleByCode: Map<string, "ADMIN" | "VOLUNTEER">, code: string): "ADMIN" | "VOLUNTEER" {
+  const s = String(rowStatus ?? "").toUpperCase().trim();
+  if (s === "ADMIN" || s === "VOLUNTEER") return s as any;
+  return roleByCode.get(code) ?? "VOLUNTEER";
 }
 
 export const Leaderboard: React.FC = () => {
@@ -91,9 +159,9 @@ export const Leaderboard: React.FC = () => {
         }
 
         // =========================
-        // 1) ✅ ดึง volunteers ให้ครบทุกแถว (paginate)
+        // 1) ✅ ดึง volunteers ให้ครบทุกแถว (paginate) + dedupe
         // =========================
-        const vRows = await fetchAll<any>(
+        const vRows = await fetchAll<VolunteerRow>(
           (from, to) =>
             supabaseClient
               .from("volunteers")
@@ -104,24 +172,51 @@ export const Leaderboard: React.FC = () => {
 
         if (cancelled) return;
 
-        const allVols = (vRows ?? []).map((r: any) => ({
-          id: r.id ?? normalizeCode(r.volunteer_code),
+        // normalize + dedupe by volunteer_code
+        const bestByCode = new Map<string, VolunteerRow>();
+
+        for (const r of vRows ?? []) {
+          const code = normalizeCode(r.volunteer_code);
+          if (!code) continue;
+
+          const normalized: VolunteerRow = {
+            ...r,
+            volunteer_code: code,
+            name: String(r.name ?? "").trim(),
+            branch: String(r.branch ?? "").trim(),
+            role: String(r.role ?? "").trim(),
+            points: Number(r.points ?? 0),
+          };
+
+          const existing = bestByCode.get(code);
+          bestByCode.set(code, existing ? pickBetterVolunteer(existing, normalized) : normalized);
+        }
+
+        const dedupedVols = Array.from(bestByCode.values()).map((r) => ({
+          id: r.id ?? r.volunteer_code,
           volunteer_code: normalizeCode(r.volunteer_code),
-          name: r.name ?? "",
-          branch: r.branch ?? "",
-          role: r.role ?? "",
+          name: String(r.name ?? "").trim(),
+          branch: String(r.branch ?? "").trim(),
+          role: String(r.role ?? "").trim(),
           points: Number(r.points ?? 0),
         }));
 
+        // roleByCode (ใช้ตัดสิน status NULL และแบ่ง viewType)
+        const roleByCode = new Map<string, "ADMIN" | "VOLUNTEER">();
+        for (const v of dedupedVols) {
+          roleByCode.set(v.volunteer_code, normalizeRole(v.role));
+        }
+
         const vols =
           mode === "ADMIN"
-            ? allVols.filter(isStaffLike)
-            : allVols.filter((r) => !isStaffLike(r));
+            ? dedupedVols.filter((r) => isStaffLikeByRole(r.role))
+            : dedupedVols.filter((r) => !isStaffLikeByRole(r.role));
 
         // =========================
         // 2) ✅ ดึง activity_history ให้ครบทุกแถวตามเงื่อนไข (paginate)
+        //    ❗ไม่ filter status ที่ query แล้ว (กัน status NULL / กัน import พัง)
         // =========================
-        const actRows = await fetchAll<any>(
+        const actRows = await fetchAll<ActivityRow>(
           (from, to) => {
             let q = supabaseClient
               .from("activity_history")
@@ -130,12 +225,6 @@ export const Leaderboard: React.FC = () => {
               .range(from, to);
 
             if (!isAllYears) q = q.eq("thai_year", selectedYear);
-
-            q =
-              mode === "ADMIN"
-                ? q.eq("status", "ADMIN")
-                : q.eq("status", "VOLUNTEER");
-
             return q;
           },
           1000
@@ -144,9 +233,17 @@ export const Leaderboard: React.FC = () => {
         if (cancelled) return;
 
         const activityCountByCode = new Map<string, number>();
+
         for (const a of actRows ?? []) {
-          const code = normalizeCode((a as any).volunteer_code);
+          const code = normalizeCode(a.volunteer_code);
           if (!code) continue;
+
+          // decide effective status
+          const s = effectiveStatus(a.status, roleByCode, code);
+
+          if (mode === "ADMIN" && s !== "ADMIN") continue;
+          if (mode !== "ADMIN" && s !== "VOLUNTEER") continue;
+
           activityCountByCode.set(code, (activityCountByCode.get(code) ?? 0) + 1);
         }
 
@@ -159,10 +256,10 @@ export const Leaderboard: React.FC = () => {
           const activityCount = Number(activityCountByCode.get(empId) ?? 0);
 
           const volunteer: Volunteer = {
-            id: empId || crypto.randomUUID(),
+            id: empId || (typeof crypto !== "undefined" ? crypto.randomUUID() : `${Date.now()}_${Math.random()}`),
             empId,
-            name: r.name ?? "",
-            type: r.branch ?? "",
+            name: (r.name ?? "").trim(), // ถ้าหายจริงๆ แสดงว่าข้อมูลใน DB ว่าง
+            type: (r.branch ?? "").trim(),
           } as any;
 
           const pointsAfterRule = isNoScoreYear ? 0 : pointsRaw;
@@ -305,7 +402,8 @@ export const Leaderboard: React.FC = () => {
 
               const name = (item.volunteer.name ?? "").trim();
               const branch = (item.volunteer.type ?? "").trim();
-              const nameWithBranch = name && branch ? `${name} • ${branch}` : name || branch || "";
+              const nameWithBranch =
+                name && branch ? `${name} • ${branch}` : name || branch || "";
 
               const topBg =
                 isTop1
@@ -339,7 +437,7 @@ export const Leaderboard: React.FC = () => {
 
               return (
                 <div
-                  key={`${item.volunteer.empId}_${index}`}
+                  key={item.volunteer.empId} // ✅ stable หลัง dedupe แล้ว
                   className={[
                     "p-4 flex items-center gap-4 transition animate-fade-in-up relative",
                     isTop ? `${topBg} ${topRing} ${topShadow} rounded-2xl mx-3 my-2` : "hover:bg-pink-50/50",
@@ -387,7 +485,7 @@ export const Leaderboard: React.FC = () => {
                       {nameWithBranch ? (
                         <div className="text-sm font-semibold text-gray-700 truncate -mt-0.5">{nameWithBranch}</div>
                       ) : (
-                        <div className="text-xs text-gray-400 -mt-0.5">—</div>
+                        <div className="text-xs text-gray-400 -mt-0.5">ไม่พบชื่อ/สาขา</div>
                       )}
                     </div>
 
