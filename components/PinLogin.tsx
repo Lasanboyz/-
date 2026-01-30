@@ -107,7 +107,7 @@ export default function PinLogin({ onSuccess }: { onSuccess: (data: any) => void
                   />
                 </div>
                 <div className="mt-2 text-xs text-gray-400">
-                  รองรับทั้งเลขล้วน และรหัสขึ้นต้นด้วยตัวอักษร (เช่น CF)
+                  กรอกรหัสพนักงานของท่าน
                 </div>
               </div>
 
