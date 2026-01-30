@@ -31,14 +31,11 @@ type ActivityRow = {
   status: any; // "ADMIN" | "VOLUNTEER" | null
 };
 
-// ---- Code normalize (สำคัญมาก) ----
-// 1) trim/remove spaces
-// 2) uppercase
-// 3) รองรับกรณีเป็น number -> pad 8 หลัก (กัน leading zero หาย)
+// ---------- helpers ----------
 function normalizeCode(v: any) {
   if (v === null || v === undefined) return "";
 
-  // If it is a number, it already lost leading zeros; pad to 8 as a practical default.
+  // number may lose leading zeros; pad to 8 as practical default
   if (typeof v === "number" && Number.isFinite(v)) {
     const s = String(Math.trunc(v));
     return s.padStart(8, "0").toUpperCase();
@@ -46,11 +43,10 @@ function normalizeCode(v: any) {
 
   const raw = String(v).trim().replace(/\s+/g, "").toUpperCase();
 
-  // If it's all digits and short, try padStart to 8 (common employee/volunteer code length)
+  // if purely digits and short, pad to 8
   if (/^\d+$/.test(raw) && raw.length > 0 && raw.length < 8) {
     return raw.padStart(8, "0");
   }
-
   return raw;
 }
 
@@ -59,19 +55,18 @@ function normalizeRole(role: any): "ADMIN" | "VOLUNTEER" {
   return r === "ADMIN" || r === "STAFF" ? "ADMIN" : "VOLUNTEER";
 }
 
-function isStaffLikeByRole(role: any) {
+function isStaffLikeRole(role: any) {
   const r = String(role ?? "").toUpperCase().trim();
   return r === "ADMIN" || r === "STAFF";
 }
 
 /**
- * ✅ PostgREST limit ~1000 rows ต่อ request
- * ทำ helper ดึงแบบ paginate จนครบ
+ * PostgREST limit ~1000 rows; fetch all pages
  */
 async function fetchAll<T>(
   makeQuery: (from: number, to: number) => any,
   pageSize = 1000,
-  maxPages = 80 // กันลูปไม่จบ (80k rows)
+  maxPages = 80
 ): Promise<T[]> {
   const out: T[] = [];
   for (let page = 0; page < maxPages; page++) {
@@ -90,7 +85,6 @@ async function fetchAll<T>(
 }
 
 function pickBetterVolunteer(a: VolunteerRow, b: VolunteerRow): VolunteerRow {
-  // เลือกแถวที่ "ดีที่สุด" เมื่อ volunteer_code ซ้ำ
   const aName = String(a.name ?? "").trim();
   const bName = String(b.name ?? "").trim();
   const aBranch = String(a.branch ?? "").trim();
@@ -102,20 +96,25 @@ function pickBetterVolunteer(a: VolunteerRow, b: VolunteerRow): VolunteerRow {
   if (!!aName !== !!bName) return aName ? a : b;
   // Prefer non-empty branch
   if (!!aBranch !== !!bBranch) return aBranch ? a : b;
-  // Prefer higher points (just in case)
+  // Prefer higher points
   if (aPts !== bPts) return aPts > bPts ? a : b;
 
-  // Prefer ADMIN/STAFF row if one is staff-like (rare)
-  const aStaff = isStaffLikeByRole(a.role);
-  const bStaff = isStaffLikeByRole(b.role);
+  // Prefer staff-like role if mismatch
+  const aStaff = isStaffLikeRole(a.role);
+  const bStaff = isStaffLikeRole(b.role);
   if (aStaff !== bStaff) return aStaff ? a : b;
 
-  return a; // stable
+  return a;
 }
 
-function effectiveStatus(rowStatus: any, roleByCode: Map<string, "ADMIN" | "VOLUNTEER">, code: string): "ADMIN" | "VOLUNTEER" {
+function effectiveStatus(
+  rowStatus: any,
+  roleByCode: Map<string, "ADMIN" | "VOLUNTEER">,
+  code: string
+): "ADMIN" | "VOLUNTEER" {
   const s = String(rowStatus ?? "").toUpperCase().trim();
   if (s === "ADMIN" || s === "VOLUNTEER") return s as any;
+  // fallback: if null/unknown -> use role from volunteers; default volunteer
   return roleByCode.get(code) ?? "VOLUNTEER";
 }
 
@@ -158,9 +157,7 @@ export const Leaderboard: React.FC = () => {
           return;
         }
 
-        // =========================
-        // 1) ✅ ดึง volunteers ให้ครบทุกแถว (paginate) + dedupe
-        // =========================
+        // 1) volunteers (paginate) + dedupe by code
         const vRows = await fetchAll<VolunteerRow>(
           (from, to) =>
             supabaseClient
@@ -172,9 +169,7 @@ export const Leaderboard: React.FC = () => {
 
         if (cancelled) return;
 
-        // normalize + dedupe by volunteer_code
         const bestByCode = new Map<string, VolunteerRow>();
-
         for (const r of vRows ?? []) {
           const code = normalizeCode(r.volunteer_code);
           if (!code) continue;
@@ -201,21 +196,13 @@ export const Leaderboard: React.FC = () => {
           points: Number(r.points ?? 0),
         }));
 
-        // roleByCode (ใช้ตัดสิน status NULL และแบ่ง viewType)
         const roleByCode = new Map<string, "ADMIN" | "VOLUNTEER">();
         for (const v of dedupedVols) {
           roleByCode.set(v.volunteer_code, normalizeRole(v.role));
         }
 
-        const vols =
-          mode === "ADMIN"
-            ? dedupedVols.filter((r) => isStaffLikeByRole(r.role))
-            : dedupedVols.filter((r) => !isStaffLikeByRole(r.role));
-
-        // =========================
-        // 2) ✅ ดึง activity_history ให้ครบทุกแถวตามเงื่อนไข (paginate)
-        //    ❗ไม่ filter status ที่ query แล้ว (กัน status NULL / กัน import พัง)
-        // =========================
+        // 2) activity_history (paginate)
+        // ❗ do NOT filter by status in query; we'll classify client-side
         const actRows = await fetchAll<ActivityRow>(
           (from, to) => {
             let q = supabaseClient
@@ -232,47 +219,53 @@ export const Leaderboard: React.FC = () => {
 
         if (cancelled) return;
 
-        const activityCountByCode = new Map<string, number>();
+        // Count both buckets
+        const adminCountByCode = new Map<string, number>();
+        const volunteerCountByCode = new Map<string, number>();
 
         for (const a of actRows ?? []) {
           const code = normalizeCode(a.volunteer_code);
           if (!code) continue;
 
-          // decide effective status
           const s = effectiveStatus(a.status, roleByCode, code);
-
-          if (mode === "ADMIN" && s !== "ADMIN") continue;
-          if (mode !== "ADMIN" && s !== "VOLUNTEER") continue;
-
-          activityCountByCode.set(code, (activityCountByCode.get(code) ?? 0) + 1);
+          if (s === "ADMIN") adminCountByCode.set(code, (adminCountByCode.get(code) ?? 0) + 1);
+          else volunteerCountByCode.set(code, (volunteerCountByCode.get(code) ?? 0) + 1);
         }
 
-        // =========================
-        // 3) Merge -> LeaderboardItem
-        // =========================
-        const mapped: LeaderboardItem[] = vols.map((r) => {
-          const empId = r.volunteer_code;
-          const pointsRaw = Number(r.points ?? 0);
-          const activityCount = Number(activityCountByCode.get(empId) ?? 0);
+        // 3) Build "source list" by activity map keys (สำคัญ!)
+        // ✅ STAFF: เอาทุก code ที่มี admin activity count > 0 แม้ role จะไม่ใช่ ADMIN/STAFF
+        // ✅ VOLUNTEER: เอาทุก code ที่มี volunteer activity count > 0
+        const countMap = mode === "ADMIN" ? adminCountByCode : volunteerCountByCode;
 
-          const volunteer: Volunteer = {
-            id: empId || (typeof crypto !== "undefined" ? crypto.randomUUID() : `${Date.now()}_${Math.random()}`),
-            empId,
-            name: (r.name ?? "").trim(), // ถ้าหายจริงๆ แสดงว่าข้อมูลใน DB ว่าง
-            type: (r.branch ?? "").trim(),
-          } as any;
+        const rowsForLeaderboard = Array.from(countMap.entries())
+          .filter(([, cnt]) => cnt > 0)
+          .map(([code, cnt]) => {
+            const info = bestByCode.get(code);
+            const pointsRaw = Number(info?.points ?? 0);
+            const pointsAfterRule = isNoScoreYear ? 0 : pointsRaw;
 
-          const pointsAfterRule = isNoScoreYear ? 0 : pointsRaw;
-          const rank = getRank(pointsAfterRule, activityCount);
+            const volunteer: Volunteer = {
+              id: code,
+              empId: code,
+              name: String(info?.name ?? "").trim(),
+              type: String(info?.branch ?? "").trim(),
+            } as any;
 
-          return { volunteer, points: pointsAfterRule, activityCount, rank };
-        });
+            const rank = getRank(pointsAfterRule, cnt);
 
-        mapped.sort((a, b) =>
+            return {
+              volunteer,
+              points: pointsAfterRule,
+              activityCount: cnt,
+              rank,
+            } as LeaderboardItem;
+          });
+
+        rowsForLeaderboard.sort((a, b) =>
           highlightActivityCount ? b.activityCount - a.activityCount : b.points - a.points
         );
 
-        setItems(mapped);
+        setItems(rowsForLeaderboard);
       } catch (e: any) {
         if (cancelled) return;
         console.error("Leaderboard load error:", e);
@@ -358,7 +351,7 @@ export const Leaderboard: React.FC = () => {
         </div>
 
         <h2 className="text-xl font-bold relative z-10">
-          {isAllYears
+          {selectedYear === 0
             ? viewType === "VOLUNTEER"
               ? "สุดยอดอาสาตลอดกาล"
               : "สุดยอดทีมงานตลอดกาล"
@@ -402,8 +395,7 @@ export const Leaderboard: React.FC = () => {
 
               const name = (item.volunteer.name ?? "").trim();
               const branch = (item.volunteer.type ?? "").trim();
-              const nameWithBranch =
-                name && branch ? `${name} • ${branch}` : name || branch || "";
+              const nameWithBranch = name && branch ? `${name} • ${branch}` : name || branch || "";
 
               const topBg =
                 isTop1
@@ -437,7 +429,7 @@ export const Leaderboard: React.FC = () => {
 
               return (
                 <div
-                  key={item.volunteer.empId} // ✅ stable หลัง dedupe แล้ว
+                  key={item.volunteer.empId}
                   className={[
                     "p-4 flex items-center gap-4 transition animate-fade-in-up relative",
                     isTop ? `${topBg} ${topRing} ${topShadow} rounded-2xl mx-3 my-2` : "hover:bg-pink-50/50",
